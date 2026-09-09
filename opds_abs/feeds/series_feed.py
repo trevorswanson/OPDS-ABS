@@ -196,7 +196,7 @@ class SeriesFeedGenerator(BaseFeedGenerator):
                 # Fall back to API call if we couldn't find any book IDs
                 params = {"filter": f"series.{self.create_filter(series_id)}"}
                 data = await fetch_from_api(
-                        "/libraries/{library_id}/items",
+                        f"/libraries/{library_id}/items",
                         params,
                         username=username,
                         token=token
