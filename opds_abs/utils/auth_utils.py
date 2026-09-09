@@ -81,54 +81,50 @@ security = HTTPBasic(auto_error=False)
 TOKEN_CACHE: Dict[str, Tuple[str, str]] = {}
 
 
-async def authenticate_with_audiobookshelf(
-        username: str, password: str, api_key: str = None) -> Tuple[str, str]:
-    """Authenticate with Audiobookshelf and get a token.
+async def _try_password_as_api_key(username: str, password: str) -> Optional[Tuple[str, str]]:
+    """If the password looks like an API key, try authenticating with it as one.
+
+    API keys in Audiobookshelf are typically 32+ characters, and this is only
+    attempted if API_KEY_AUTH_ENABLED is true.
 
     Args:
-        username: Username to authenticate with
-        password: Password to authenticate with
-        api_key: API key to authenticate with (optional)
+        username: The username being authenticated.
+        password: The supplied password/credential.
+
+    Returns:
+        Tuple of (token, display_name) if the credential worked as an API key,
+        else None to signal the caller should fall back to password auth.
+    """
+    if not (password and API_KEY_AUTH_ENABLED and len(password) >= 32):
+        logger.debug("Using regular password authentication")
+        return None
+
+    logger.debug(
+        "Password looks like an API key (length: %s), trying API key auth first",
+        len(password))
+    try:
+        # Try to authenticate with the credential as an API key
+        return await authenticate_with_api_key(username, password)
+    except AuthenticationError as e:
+        # If that fails, continue with regular password authentication
+        logger.debug("Credential doesn't appear to be a valid API key: %s", e)
+        logger.debug("Falling back to regular password authentication")
+        return None
+
+
+async def _login_with_password(username: str, password: str) -> Tuple[str, str]:
+    """Log in to Audiobookshelf with a username/password and cache the token.
+
+    Args:
+        username: The username to authenticate with.
+        password: The password to authenticate with.
 
     Returns:
         Tuple of (token, display_name)
 
     Raises:
-        AuthenticationError: If authentication fails
+        AuthenticationError: If authentication fails for any reason.
     """
-    # Log authentication attempt
-    if api_key:
-        logger.debug(
-            "Authentication attempt for %s with API key (length: %s)", username, len(api_key))
-    elif password:
-        logger.debug(
-            "Authentication attempt for %s with password (length: %s)", username, len(password))
-    else:
-        logger.warning("Authentication attempt for %s without credentials", username)
-
-    # If API key is provided and API key authentication is enabled, use API key auth
-    if api_key and API_KEY_AUTH_ENABLED:
-        logger.debug("Using API key authentication for %s", username)
-        return await authenticate_with_api_key(username, api_key)
-
-    # For username/password, check if the "password" might actually be an API key
-    # API keys in Audiobookshelf are typically 32+ characters
-    # Only try this if API_KEY_AUTH_ENABLED is true
-    if password and API_KEY_AUTH_ENABLED and len(password) >= 32:
-        logger.debug(
-            "Password looks like an API key (length: %s), trying API key auth first",
-            len(password))
-        try:
-            # Try to authenticate with the credential as an API key
-            return await authenticate_with_api_key(username, password)
-        except AuthenticationError as e:
-            # If that fails, continue with regular password authentication
-            logger.debug("Credential doesn't appear to be a valid API key: %s", e)
-            logger.debug("Falling back to regular password authentication")
-    else:
-        logger.debug("Using regular password authentication")
-
-    # Regular username/password authentication
     login_url = f"{AUDIOBOOKSHELF_INTERNAL_URL}/login"
 
     try:
@@ -184,6 +180,45 @@ async def authenticate_with_audiobookshelf(
         context = "Processing authentication response from Audiobookshelf"
         log_error(e, context=context)
         raise AuthenticationError(f"Authentication error: {str(e)}") from e
+
+
+async def authenticate_with_audiobookshelf(
+        username: str, password: str, api_key: str = None) -> Tuple[str, str]:
+    """Authenticate with Audiobookshelf and get a token.
+
+    Args:
+        username: Username to authenticate with
+        password: Password to authenticate with
+        api_key: API key to authenticate with (optional)
+
+    Returns:
+        Tuple of (token, display_name)
+
+    Raises:
+        AuthenticationError: If authentication fails
+    """
+    # Log authentication attempt
+    if api_key:
+        logger.debug(
+            "Authentication attempt for %s with API key (length: %s)", username, len(api_key))
+    elif password:
+        logger.debug(
+            "Authentication attempt for %s with password (length: %s)", username, len(password))
+    else:
+        logger.warning("Authentication attempt for %s without credentials", username)
+
+    # If API key is provided and API key authentication is enabled, use API key auth
+    if api_key and API_KEY_AUTH_ENABLED:
+        logger.debug("Using API key authentication for %s", username)
+        return await authenticate_with_api_key(username, api_key)
+
+    # For username/password, check if the "password" might actually be an API key
+    api_key_result = await _try_password_as_api_key(username, password)
+    if api_key_result is not None:
+        return api_key_result
+
+    # Regular username/password authentication
+    return await _login_with_password(username, password)
 
 
 async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, str]:
