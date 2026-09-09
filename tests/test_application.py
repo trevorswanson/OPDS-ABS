@@ -74,9 +74,9 @@ class XmlAndErrorTests(unittest.TestCase):
             "bad login"), return_json=True, log_traceback=False)
 
         self.assertEqual(xml_response.status_code, 404)
-        self.assertIn(b"<message>missing</message>", xml_response.body)
+        self.assertIn(b"<message>Resource not found</message>", xml_response.body)
         self.assertEqual(json_response.status_code, 401)
-        self.assertEqual(json.loads(json_response.body)["message"], "bad login")
+        self.assertEqual(json.loads(json_response.body)["message"], "Authentication failed")
         self.assertEqual(convert_to_http_exception(
             APIClientError("upstream"), status_code=504).status_code, 504)
 

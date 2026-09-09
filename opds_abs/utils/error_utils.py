@@ -164,16 +164,16 @@ def handle_exception(
     # Determine the status code and a safe client-facing message
     if isinstance(exc, OPDSBaseException):
         code = exc.status_code
-        # These messages are authored by our own application code (e.g.
-        # ResourceNotFoundError("missing")), not derived from stack traces
-        # or internal details, so they're safe to pass through to clients.
-        message = str(exc) or exc.default_message
+        # Defense in depth: always use the class-level default rather than
+        # the instance message, so a future raise site can never leak
+        # something sensitive into a client-facing response by accident.
+        # The real message is still logged in full below.
+        message = exc.default_message
     elif isinstance(exc, HTTPException):
         code = exc.status_code
-        # detail is set explicitly by our own route handlers (e.g.
-        # HTTPException(status_code=404, detail="Image not found")), not
-        # derived from stack traces or internal details, so it's safe here.
-        message = exc.detail
+        # Same defense-in-depth reasoning as above - don't pass through
+        # detail text verbatim, even though today's call sites are safe.
+        message = "Request failed" if 400 <= code < 500 else "An internal server error occurred"
     else:
         code = 500
         # Don't leak internal exception details (which can include things like
