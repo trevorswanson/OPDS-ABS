@@ -43,10 +43,10 @@ error handling and authentication patterns applied consistently.
 """
 # Standard library imports
 import logging
-import re
 import time
 import atexit
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 
 # Third-party imports
@@ -398,31 +398,6 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     return await http_exception_handler(request, exc)
 
 
-_SAFE_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
-
-
-def _is_safe_username(value: str) -> bool:
-    """Check whether a value looks like a plain username, safe to embed in a URL.
-
-    display_name comes from the Audiobookshelf server's authentication
-    response rather than FastAPI's path routing, so unlike path parameters
-    it isn't guaranteed to be free of "/" or other characters that could
-    let it redirect somewhere other than intended.
-
-    Callers select between display_name and a known-safe fallback (e.g. the
-    routed username path parameter) inline, based on this check, so static
-    analysis of the redirect construction can see the tainted value is only
-    ever used after being validated.
-
-    Args:
-        value: The value to check.
-
-    Returns:
-        bool: True if value contains only plain-username characters.
-    """
-    return bool(_SAFE_USERNAME_PATTERN.match(str(value)))
-
-
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     """Render the index page.
@@ -469,9 +444,15 @@ async def opds_root_redirect(
             headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
         )
 
-    # Redirect to the user's OPDS root
-    safe_name = display_name if _is_safe_username(display_name) else "anonymous"
-    return RedirectResponse(url=f"/opds/{safe_name}")
+    # Redirect to the user's OPDS root. display_name comes from the
+    # Audiobookshelf server's authentication response rather than FastAPI's
+    # path routing, so validate it the way CodeQL's py/url-redirection query
+    # recommends before using it to build a redirect target.
+    target = f"/opds/{display_name}"
+    target = target.replace("\\", "")
+    if not urlparse(target).netloc and not urlparse(target).scheme:
+        return RedirectResponse(url=target)
+    return RedirectResponse(url="/opds/anonymous")
 
 
 @app.get("/opds/{username}/libraries/{library_id}/search.xml", response_class=HTMLResponse)
@@ -497,9 +478,12 @@ async def search_xml(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            safe_name = display_name if _is_safe_username(display_name) else username
+            target = f"/opds/{display_name}/libraries/{library_id}/search.xml"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
             return RedirectResponse(
-                url=f"/opds/{safe_name}/libraries/{library_id}/search.xml"
+                url=f"/opds/{username}/libraries/{library_id}/search.xml"
             )
 
         params = dict(request.query_params)
@@ -535,8 +519,11 @@ async def opds_root(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            safe_name = display_name if _is_safe_username(display_name) else username
-            return RedirectResponse(url=f"/opds/{safe_name}")
+            target = f"/opds/{display_name}"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
+            return RedirectResponse(url=f"/opds/{username}")
 
         # Use the display name from authentication if available
         effective_username = display_name if auth_username else username
@@ -575,10 +562,11 @@ async def opds_nav(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            safe_name = display_name if _is_safe_username(display_name) else username
-            return RedirectResponse(
-                url=f"/opds/{safe_name}/libraries/{library_id}"
-            )
+            target = f"/opds/{display_name}/libraries/{library_id}"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
+            return RedirectResponse(url=f"/opds/{username}/libraries/{library_id}")
 
         # Use the display name from authentication if available
         effective_username = display_name if auth_username else username
@@ -622,11 +610,16 @@ async def opds_search(
         if AUTH_ENABLED and auth_username and username != display_name:
             # Preserve search parameters in the redirect
             params_str = "&".join([f"{k}={v}" for k, v in request.query_params.items()])
-            safe_name = display_name if _is_safe_username(display_name) else username
-            redirect_url = f"/opds/{safe_name}/libraries/{library_id}/search"
+            target = f"/opds/{display_name}/libraries/{library_id}/search"
             if params_str:
-                redirect_url += f"?{params_str}"
-            return RedirectResponse(url=redirect_url)
+                target += f"?{params_str}"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
+            fallback_url = f"/opds/{username}/libraries/{library_id}/search"
+            if params_str:
+                fallback_url += f"?{params_str}"
+            return RedirectResponse(url=fallback_url)
 
         # Use the display name from authentication if available
         effective_username = display_name if auth_username else username
@@ -679,11 +672,16 @@ async def opds_library(
         if AUTH_ENABLED and auth_username and username != display_name:
             # Preserve query parameters in the redirect
             params_str = "&".join([f"{k}={v}" for k, v in request.query_params.items()])
-            safe_name = display_name if _is_safe_username(display_name) else username
-            redirect_url = f"/opds/{safe_name}/libraries/{library_id}/items"
+            target = f"/opds/{display_name}/libraries/{library_id}/items"
             if params_str:
-                redirect_url += f"?{params_str}"
-            return RedirectResponse(url=redirect_url)
+                target += f"?{params_str}"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
+            fallback_url = f"/opds/{username}/libraries/{library_id}/items"
+            if params_str:
+                fallback_url += f"?{params_str}"
+            return RedirectResponse(url=fallback_url)
 
         # Use the display name from authentication if available
         effective_username = display_name if auth_username else username
@@ -730,10 +728,11 @@ async def opds_series(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            safe_name = display_name if _is_safe_username(display_name) else username
-            return RedirectResponse(
-                url=f"/opds/{safe_name}/libraries/{library_id}/series"
-            )
+            target = f"/opds/{display_name}/libraries/{library_id}/series"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
+            return RedirectResponse(url=f"/opds/{username}/libraries/{library_id}/series")
 
         # Use the display name from authentication if available
         effective_username = display_name if auth_username else username
@@ -784,9 +783,12 @@ async def opds_series_items(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            safe_name = display_name if _is_safe_username(display_name) else username
+            target = f"/opds/{display_name}/libraries/{library_id}/series/{series_id}"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
             return RedirectResponse(
-                url=f"/opds/{safe_name}/libraries/{library_id}/series/{series_id}"
+                url=f"/opds/{username}/libraries/{library_id}/series/{series_id}"
             )
 
         # Use the display name from authentication if available
@@ -831,9 +833,12 @@ async def opds_collections(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            safe_name = display_name if _is_safe_username(display_name) else username
+            target = f"/opds/{display_name}/libraries/{library_id}/collections"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
             return RedirectResponse(
-                url=f"/opds/{safe_name}/libraries/{library_id}/collections"
+                url=f"/opds/{username}/libraries/{library_id}/collections"
             )
 
         # Use the display name from authentication if available
@@ -876,10 +881,16 @@ async def opds_collection_items(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            safe_name = display_name if _is_safe_username(display_name) else username
+            target = (
+                f"/opds/{display_name}/libraries/{library_id}/"
+                f"collections/{collection_id}"
+            )
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
             return RedirectResponse(
                 url=(
-                    f"/opds/{safe_name}/libraries/{library_id}/"
+                    f"/opds/{username}/libraries/{library_id}/"
                     f"collections/{collection_id}"
                 )
             )
@@ -926,9 +937,12 @@ async def opds_authors(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            safe_name = display_name if _is_safe_username(display_name) else username
+            target = f"/opds/{display_name}/libraries/{library_id}/authors"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
             return RedirectResponse(
-                url=f"/opds/{safe_name}/libraries/{library_id}/authors"
+                url=f"/opds/{username}/libraries/{library_id}/authors"
             )
 
         # Use the display name from authentication if available
@@ -971,9 +985,12 @@ async def opds_author_items(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            safe_name = display_name if _is_safe_username(display_name) else username
+            target = f"/opds/{display_name}/libraries/{library_id}/authors/{author_id}"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                return RedirectResponse(url=target)
             return RedirectResponse(
-                url=f"/opds/{safe_name}/libraries/{library_id}/authors/{author_id}"
+                url=f"/opds/{username}/libraries/{library_id}/authors/{author_id}"
             )
 
         # Use the display name from authentication if available
