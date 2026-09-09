@@ -139,8 +139,10 @@ GitHub Actions workflows live in `.github/workflows/`:
 Flake8 and Pylint are development dependencies but are not required CI gates
 yet. The inherited codebase has a large existing warning/error baseline, and
 the current Pylint configuration contains an option unsupported by newer
-Pylint releases. Tightening either tool should be a separate cleanup with a
-baseline or incremental rollout, not an accidental all-at-once refactor.
+Pylint releases. Coverage is measured and uploaded by the Python quality job;
+the current baseline is intentionally reported without a blocking threshold.
+Tightening either tool should be a separate cleanup with a baseline or
+incremental rollout, not an accidental all-at-once refactor.
 
 Workflows use GitHub's job-scoped `GITHUB_TOKEN` with `packages: write`; do not
 introduce a personal access token unless the GitHub Actions design genuinely

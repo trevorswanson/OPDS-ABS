@@ -163,7 +163,10 @@ async def lifespan(app: FastAPI):
     logger.info(f"Audiobookshelf Internal URL: {AUDIOBOOKSHELF_INTERNAL_URL}")
     logger.info(f"Audiobookshelf External URL: {AUDIOBOOKSHELF_EXTERNAL_URL}")
     logger.info(f"Authentication Enabled: {AUTH_ENABLED}")
-    logger.info(f"API Key Authentication Enabled: {API_KEY_AUTH_ENABLED}")
+    if API_KEY_AUTH_ENABLED:
+        logger.info("API key authentication is enabled")
+    else:
+        logger.info("API key authentication is disabled")
     if not API_KEY_AUTH_ENABLED:
         logger.warning("API Key Authentication is DISABLED. Only username/password will work.")
     logger.info(f"Auth Token Caching: {AUTH_TOKEN_CACHING}")

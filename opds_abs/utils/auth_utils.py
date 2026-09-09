@@ -432,7 +432,7 @@ async def get_user_token(username: str, password: str = None, api_key: str = Non
         # For placeholder usernames, we get the real username from authenticate_with_api_key
         if username == "api_key_user":
             username = display_name
-            logger.debug("Updated username from API key: %s", username)
+            logger.debug("Updated username from API key response")
     elif password:
         # Use username/password authentication
         token, display_name = await authenticate_with_audiobookshelf(username, password)
@@ -448,7 +448,7 @@ async def get_user_token(username: str, password: str = None, api_key: str = Non
         # Update in-memory cache with the correct username
         TOKEN_CACHE[username] = (token, display_name)
     else:
-        logger.debug("Token caching disabled, not storing token for %s", username)
+        logger.debug("Token caching disabled; token was not stored")
 
     return token, display_name
 
