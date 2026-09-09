@@ -161,13 +161,15 @@ def handle_exception(
                 return handle_exception(e, context=context)
         ```
     """
-    # Determine the status code
+    # Determine the status code and a safe client-facing message
     if isinstance(exc, OPDSBaseException):
         code = exc.status_code
-        message = str(exc) or exc.default_message
+        # Use predefined safe defaults for OPDS application errors.
+        message = exc.default_message
     elif isinstance(exc, HTTPException):
         code = exc.status_code
-        message = exc.detail
+        # Avoid exposing upstream/internal HTTP exception detail text.
+        message = "Request failed" if 400 <= code < 500 else "An internal server error occurred"
     else:
         code = 500
         # Don't leak internal exception details (which can include things like
