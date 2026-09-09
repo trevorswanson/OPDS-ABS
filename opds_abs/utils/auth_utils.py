@@ -290,7 +290,7 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
                     actual_username = user_data.get("username", "")
                     display_name = actual_username
 
-                    # If username was provided (not the placeholder) and doesn't match, log a warning
+                    # If username was provided and doesn't match, log a warning.
                     if username != "api_key_user" and username != actual_username:
                         logger.warning("API key belongs to user '%s', not '%s'",
                                        actual_username, username)
@@ -311,7 +311,11 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
                      f"{AUDIOBOOKSHELF_INTERNAL_URL.split('//')[1]}")
                 ) from None
             except aiohttp.ClientError as client_error:
-                logger.error("API key authentication error for %s: %s", username, str(client_error))
+                logger.error(
+                    "API key authentication error for %s: %s",
+                    username,
+                    str(client_error),
+                )
                 raise AuthenticationError(
                     f"Error connecting to Audiobookshelf: "
                     f"{str(client_error)}") from None
@@ -370,15 +374,15 @@ def get_credentials_from_request(
                     if len(parts) == 2:
                         username, credential = parts
 
-                        # Examine the credential - if it looks like an API key and API_KEY_AUTH_ENABLED is False,
-                        # we should log a warning as this won't work properly
+                        # Examine credentials that look like API keys when API key auth is disabled.
                         if len(credential) >= 32 and not API_KEY_AUTH_ENABLED:
                             logger.warning(
-                                f"Credential for {username} looks like an API key (length {len(credential)}) "
+                                f"Credential for {username} looks like an API key "
+                                f"(length {len(credential)}) "
                                 f"but API_KEY_AUTH_ENABLED is False. Authentication may fail."
                             )
 
-                        # Return as a password - authenticate_with_audiobookshelf will handle it based on settings
+                        # Return as a password; authentication handles it based on settings.
                         return username, credential, None
 
                 logger.warning("Basic auth doesn't contain username:password format")
@@ -393,7 +397,8 @@ def get_credentials_from_request(
             # Check if API key authentication is enabled
             if not API_KEY_AUTH_ENABLED:
                 logger.warning(
-                    "Bearer token found but API_KEY_AUTH_ENABLED is False. Authentication will fail.")
+                    "Bearer token found but API_KEY_AUTH_ENABLED is False. "
+                    "Authentication will fail.")
                 return None, None, None
 
             logger.debug("Found Bearer token in Authorization header")
@@ -438,7 +443,7 @@ async def get_user_token(
     Raises:
         AuthenticationError: If authentication fails
     """
-    # Skip cache if token caching is disabled or for API key authentication with placeholder username
+    # Skip cache when disabled or using an API-key placeholder username.
     skip_cache = not AUTH_TOKEN_CACHING or (
         api_key and API_KEY_AUTH_ENABLED and username == "api_key_user")
 
@@ -516,7 +521,8 @@ async def verify_credentials(
         logger.warning(
             "API key was provided but API_KEY_AUTH_ENABLED is false, authentication will fail")
         raise AuthenticationError(
-            "API key authentication is disabled. Please use username/password or enable API_KEY_AUTH_ENABLED."
+            "API key authentication is disabled. Please use username/password "
+            "or enable API_KEY_AUTH_ENABLED."
         )
 
     # Log what kind of authentication we're dealing with
@@ -593,7 +599,7 @@ async def get_authenticated_user(
         if username and token:
             return username, token, display_name
 
-        # If credentials were provided but invalid, verify_credentials would have raised AuthenticationError
+        # Invalid supplied credentials would have raised AuthenticationError.
         # If we get here with no credentials, it means no credentials were provided
         return None, None, None
 
@@ -606,7 +612,9 @@ async def get_authenticated_user(
         ):
             # Server unavailable - raise a 503 Service Unavailable instead of 401
             error_id = id(e)
-            error_message = f"Audiobookshelf server is unavailable: {str(e)}"
+            error_message = (
+                f"Audiobookshelf server is unavailable: {str(e)}"
+            )
             logger.error(f"Server unavailable [{error_id}]: {error_message}")
 
             # Raise an HTTPException with 503 status code
