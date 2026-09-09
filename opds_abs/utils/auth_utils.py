@@ -8,9 +8,9 @@ Authentication Architecture:
 The OPDS-ABS application uses a multi-layered authentication system:
 
 1. Client Authentication Flow:
-   - Username/Password: Request → Basic Auth Header → verify_credentials() → Audiobookshelf API → Token
-   - API Key (Basic Auth): Request → Basic Auth Header (username:apikey) → verify_credentials() → Audiobookshelf API → Token
-   - API Key (Bearer): Request → Bearer Auth Header → verify_credentials() → Audiobookshelf API → Token
+   - Username/Password: Request → Basic Auth → verify_credentials() → API → Token
+   - API Key (Basic Auth): Request → Basic Auth → verify_credentials() → API → Token
+   - API Key (Bearer): Request → Bearer Auth → verify_credentials() → API → Token
 
 2. Component Relationships:
    - FastAPI dependency injection system for auth requirements
@@ -60,7 +60,13 @@ import aiohttp
 from fastapi import Request, HTTPException
 from fastapi.security import HTTPBasic
 
-from opds_abs.config import AUDIOBOOKSHELF_INTERNAL_URL, AUTH_ENABLED, AUTH_CACHE_EXPIRY, API_KEY_AUTH_ENABLED, AUTH_TOKEN_CACHING
+from opds_abs.config import (
+    AUDIOBOOKSHELF_INTERNAL_URL,
+    AUTH_ENABLED,
+    AUTH_CACHE_EXPIRY,
+    API_KEY_AUTH_ENABLED,
+    AUTH_TOKEN_CACHING,
+)
 from opds_abs.utils.cache_utils import _create_cache_key, cache_get, cache_set
 from opds_abs.utils.error_utils import AuthenticationError, log_error
 
@@ -75,7 +81,8 @@ security = HTTPBasic(auto_error=False)
 TOKEN_CACHE: Dict[str, Tuple[str, str]] = {}
 
 
-async def authenticate_with_audiobookshelf(username: str, password: str, api_key: str = None) -> Tuple[str, str]:
+async def authenticate_with_audiobookshelf(
+        username: str, password: str, api_key: str = None) -> Tuple[str, str]:
     """Authenticate with Audiobookshelf and get a token.
 
     Args:
@@ -159,13 +166,15 @@ async def authenticate_with_audiobookshelf(username: str, password: str, api_key
                 logger.error("ERROR [%s]: Cannot connect to Audiobookshelf server at %s",
                              error_id, AUDIOBOOKSHELF_INTERNAL_URL)
                 raise AuthenticationError(
-                    f"Error connecting to Audiobookshelf: Cannot connect to host {AUDIOBOOKSHELF_INTERNAL_URL.split('//')[1]}"
+                    ("Error connecting to Audiobookshelf: Cannot connect to host "
+                     f"{AUDIOBOOKSHELF_INTERNAL_URL.split('//')[1]}")
                 ) from None  # Use "from None" to suppress the traceback
             except aiohttp.ClientError as client_error:
                 # For other client errors, provide a cleaner error message
                 logger.error("Authentication error for %s: %s", username, str(client_error))
                 raise AuthenticationError(
-                    f"Error connecting to Audiobookshelf: {str(client_error)}") from None
+                    f"Error connecting to Audiobookshelf: "
+                    f"{str(client_error)}") from None
     except AuthenticationError:
         # Re-raise authentication errors without modification
         raise
@@ -212,7 +221,8 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
                     if response.status != 200:
                         error_text = await response.text()
                         logger.warning(
-                            f"API key authentication failed on /api/me: Status {response.status} - {error_text}")
+                            "API key authentication failed on /api/me: Status "
+                            f"{response.status} - {error_text}")
                         # Don't raise an exception yet, try the older method
                     else:
                         data = await response.json()
@@ -225,7 +235,8 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
                             display_name = actual_username
 
                             logger.info(
-                                f"Successfully authenticated with API key for user: {actual_username}")
+                                "Successfully authenticated with API key for user: "
+                                f"{actual_username}")
                             return token, display_name
 
                 # If we get here, /api/me didn't work. Try /api/authorize as fallback
@@ -244,7 +255,8 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
                     if response.status != 200:
                         error_text = await response.text()
                         logger.warning(
-                            f"API key authentication failed on /api/authorize: Status {response.status} - {error_text}")
+                            "API key authentication failed on /api/authorize: Status "
+                            f"{response.status} - {error_text}")
 
                         # If both methods fail, try one more legacy approach
                         # Some older versions might use POST instead of GET
@@ -259,7 +271,8 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
                             if post_response.status != 200:
                                 error_text = await post_response.text()
                                 logger.warning(
-                                    f"API key authentication failed on POST /api/authorize: Status {post_response.status} - {error_text}")
+                                    "API key authentication failed on POST /api/authorize: "
+                                    f"Status {post_response.status} - {error_text}")
                                 raise AuthenticationError(
                                     "API key authentication failed with all methods")
 
@@ -294,12 +307,14 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
                 logger.error("ERROR [%s]: Cannot connect to Audiobookshelf server at %s",
                              error_id, AUDIOBOOKSHELF_INTERNAL_URL)
                 raise AuthenticationError(
-                    f"Error connecting to Audiobookshelf: Cannot connect to host {AUDIOBOOKSHELF_INTERNAL_URL.split('//')[1]}"
+                    ("Error connecting to Audiobookshelf: Cannot connect to host "
+                     f"{AUDIOBOOKSHELF_INTERNAL_URL.split('//')[1]}")
                 ) from None
             except aiohttp.ClientError as client_error:
                 logger.error("API key authentication error for %s: %s", username, str(client_error))
                 raise AuthenticationError(
-                    f"Error connecting to Audiobookshelf: {str(client_error)}") from None
+                    f"Error connecting to Audiobookshelf: "
+                    f"{str(client_error)}") from None
     except AuthenticationError:
         # Re-raise authentication errors without modification
         raise
@@ -309,7 +324,8 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
         raise AuthenticationError(f"API key authentication error: {str(e)}") from e
 
 
-def get_credentials_from_request(request: Request) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def get_credentials_from_request(
+        request: Request) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Extract credentials from Authorization header.
 
     Args:
@@ -407,7 +423,8 @@ def get_credentials_from_request(request: Request) -> Tuple[Optional[str], Optio
     return None, None, None
 
 
-async def get_user_token(username: str, password: str = None, api_key: str = None) -> Tuple[str, str]:
+async def get_user_token(
+        username: str, password: str = None, api_key: str = None) -> Tuple[str, str]:
     """Get a token for the user, using cache if available.
 
     Args:
@@ -473,14 +490,15 @@ async def get_user_token(username: str, password: str = None, api_key: str = Non
     return token, display_name
 
 
-async def verify_credentials(request: Request) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+async def verify_credentials(
+        request: Request) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Verify the credentials in the request.
 
     Args:
         request: The FastAPI request object
 
     Returns:
-        Tuple of (username, token, display_name) or (None, None, None) if invalid or no credentials
+        Tuple of (username, token, display_name), or all None if invalid.
 
     Raises:
         AuthenticationError: If authentication is required but fails
@@ -554,7 +572,8 @@ async def verify_credentials(request: Request) -> Tuple[Optional[str], Optional[
     return None, None, None
 
 
-async def get_authenticated_user(request: Request) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+async def get_authenticated_user(
+        request: Request) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Create a FastAPI dependency to get the authenticated user.
 
     Args:
@@ -580,7 +599,11 @@ async def get_authenticated_user(request: Request) -> Tuple[Optional[str], Optio
 
     except AuthenticationError as e:
         # Check if this is a server connection issue
-        if "Cannot connect" in str(e) or "not responding" in str(e) or "connecting to Audiobookshelf" in str(e):
+        if (
+                "Cannot connect" in str(e)
+                or "not responding" in str(e)
+                or "connecting to Audiobookshelf" in str(e)
+        ):
             # Server unavailable - raise a 503 Service Unavailable instead of 401
             error_id = id(e)
             error_message = f"Audiobookshelf server is unavailable: {str(e)}"
