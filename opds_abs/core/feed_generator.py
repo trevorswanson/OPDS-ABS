@@ -510,6 +510,35 @@ class BaseFeedGenerator:
             feed, "{http://a9.com/-/spec/opensearch/1.1/}totalResults")
         total_results_el.text = str(total_items)
 
+    @staticmethod
+    def _build_pagination_link(link_ctx, rel, title, start_index):
+        """Build one OPDS pagination link entry (next or previous).
+
+        Args:
+            link_ctx (dict): current_path, has_params, auth_param - shared
+                context for both pagination links (see add_pagination_links()).
+            rel (str): The link relation ("next" or "previous").
+            title (str): The link's title.
+            start_index (int): The start_index query value for this link.
+
+        Returns:
+            dict: The link data structure ready for dict_to_xml().
+        """
+        separator = "&" if link_ctx["has_params"] else "?"
+        return {
+            "link": {
+                "_attrs": {
+                    "rel": rel,
+                    "title": title,
+                    "type": "application/atom+xml;profile=opds-catalog",
+                    "href": (
+                        f"/opds/{link_ctx['current_path']}{separator}"
+                        f"start_index={start_index}{link_ctx['auth_param']}"
+                    )
+                }
+            }
+        }
+
     def add_pagination_links(
             self, feed, current_path, page, items_per_page, total_items, token=None):
         """Add next/previous pagination links to the feed.
@@ -524,56 +553,25 @@ class BaseFeedGenerator:
         """
         total_pages = (total_items + items_per_page - 1) // items_per_page  # Ceiling division
 
-        # Base URL parameters
-        auth_param = f"&token={token}" if token else ""
-
-        # Check if current_path already has parameters
-        has_params = "?" in current_path
+        link_ctx = {
+            "current_path": current_path,
+            # Check if current_path already has parameters
+            "has_params": "?" in current_path,
+            "auth_param": f"&token={token}" if token else "",
+        }
 
         # Add next page link if there are more pages
         if page < total_pages:
-            next_page = page + 1
-            next_start_index = (next_page - 1) * items_per_page + 1
-
-            # Use correct separator based on existing parameters
-            separator = "&" if has_params else "?"
-
-            next_link = {
-                "link": {
-                    "_attrs": {
-                        "rel": "next",
-                        "title": "Next Page",
-                        "type": "application/atom+xml;profile=opds-catalog",
-                        "href": (
-                            f"/opds/{current_path}{separator}"
-                            f"start_index={next_start_index}{auth_param}"
-                        )
-                    }
-                }
-            }
+            next_start_index = page * items_per_page + 1
+            next_link = self._build_pagination_link(
+                link_ctx, "next", "Next Page", next_start_index)
             dict_to_xml(feed, next_link)
 
         # Add previous page link if not on first page
         if page > 1:
-            prev_page = page - 1
-            prev_start_index = (prev_page - 1) * items_per_page + 1
-
-            # Use correct separator based on existing parameters
-            separator = "&" if has_params else "?"
-
-            prev_link = {
-                "link": {
-                    "_attrs": {
-                        "rel": "previous",
-                        "title": "Previous Page",
-                        "type": "application/atom+xml;profile=opds-catalog",
-                        "href": (
-                            f"/opds/{current_path}{separator}"
-                            f"start_index={prev_start_index}{auth_param}"
-                        )
-                    }
-                }
-            }
+            prev_start_index = (page - 2) * items_per_page + 1
+            prev_link = self._build_pagination_link(
+                link_ctx, "previous", "Previous Page", prev_start_index)
             dict_to_xml(feed, prev_link)
 
     def paginate_results(self, items, start_index, items_per_page):
