@@ -9,7 +9,6 @@ from lxml import etree
 from fastapi.responses import Response
 
 # Local application imports
-from opds_abs.config import AUDIOBOOKSHELF_API
 from opds_abs.utils import dict_to_xml
 from opds_abs.utils.error_utils import FeedGenerationError, log_error
 
@@ -225,9 +224,6 @@ class BaseFeedGenerator:
             logger.debug("Book '%s' format: %s", book_title, ebook_format)
 
             for ebook in ebook_inos:
-                # Use external URL for client-facing download links
-                from opds_abs.config import AUDIOBOOKSHELF_EXTERNAL_URL
-                book_path = f"{AUDIOBOOKSHELF_EXTERNAL_URL}/api/items/{book_id}"
                 file_ino = ebook.get('ino')
 
                 # Use our proxy endpoint instead of direct Audiobookshelf API link

@@ -8,14 +8,14 @@ persistence using pickle.
 # Standard library imports
 import time
 import logging
-import os
+
 import pickle
 import threading
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Callable
 import functools
 import json
-import asyncio
+
 import base64
 
 # Local application imports

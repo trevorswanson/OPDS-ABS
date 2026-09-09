@@ -68,7 +68,7 @@ from opds_abs.feeds.series_feed import SeriesFeedGenerator
 from opds_abs.feeds.collection_feed import CollectionFeedGenerator
 from opds_abs.feeds.author_feed import AuthorFeedGenerator
 from opds_abs.feeds.search_feed import SearchFeedGenerator
-from opds_abs.utils.cache_utils import _cache, clear_cache, load_cache_from_disk, save_cache_to_disk
+from opds_abs.utils.cache_utils import clear_cache, load_cache_from_disk, save_cache_to_disk
 from opds_abs.api.client import invalidate_cache
 from opds_abs.utils.auth_utils import get_authenticated_user, require_auth
 from opds_abs.utils.error_utils import (
@@ -496,7 +496,7 @@ async def opds_root(
             effective_username,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -536,7 +536,7 @@ async def opds_nav(
             library_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -585,7 +585,7 @@ async def opds_search(
             params,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -646,7 +646,7 @@ async def opds_library(
             params,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -686,7 +686,7 @@ async def opds_series(
             library_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -738,7 +738,7 @@ async def opds_series_items(
             series_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -778,7 +778,7 @@ async def opds_collections(
             library_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -821,7 +821,7 @@ async def opds_collection_items(
             collection_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -861,7 +861,7 @@ async def opds_authors(
             library_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -904,7 +904,7 @@ async def opds_author_items(
             author_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
