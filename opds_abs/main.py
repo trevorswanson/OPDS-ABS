@@ -50,8 +50,15 @@ from urllib.parse import urlparse
 
 
 # Third-party imports
+import aiohttp
 from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.exception_handlers import http_exception_handler
@@ -69,7 +76,12 @@ from opds_abs.feeds.series_feed import SeriesFeedGenerator
 from opds_abs.feeds.collection_feed import CollectionFeedGenerator
 from opds_abs.feeds.author_feed import AuthorFeedGenerator
 from opds_abs.feeds.search_feed import SearchFeedGenerator
-from opds_abs.utils.cache_utils import clear_cache, load_cache_from_disk, save_cache_to_disk
+from opds_abs.utils.cache_utils import (
+    clear_cache,
+    get_cache,
+    load_cache_from_disk,
+    save_cache_to_disk,
+)
 from opds_abs.api.client import invalidate_cache
 from opds_abs.utils.auth_utils import get_authenticated_user, require_auth
 from opds_abs.utils.error_utils import (
@@ -167,27 +179,27 @@ async def lifespan(_app: FastAPI):
     """Load the cache from disk on application startup and log configuration."""
     # Log configuration settings
     logger.info("Starting OPDS-ABS with configuration:")
-    logger.info(f"Audiobookshelf URL: {AUDIOBOOKSHELF_INTERNAL_URL}")
-    logger.info(f"Audiobookshelf Internal URL: {AUDIOBOOKSHELF_INTERNAL_URL}")
-    logger.info(f"Audiobookshelf External URL: {AUDIOBOOKSHELF_EXTERNAL_URL}")
-    logger.info(f"Authentication Enabled: {AUTH_ENABLED}")
+    logger.info("Audiobookshelf URL: %s", AUDIOBOOKSHELF_INTERNAL_URL)
+    logger.info("Audiobookshelf Internal URL: %s", AUDIOBOOKSHELF_INTERNAL_URL)
+    logger.info("Audiobookshelf External URL: %s", AUDIOBOOKSHELF_EXTERNAL_URL)
+    logger.info("Authentication Enabled: %s", AUTH_ENABLED)
     if API_KEY_AUTH_ENABLED:
         logger.info("API key authentication is enabled")
     else:
         logger.info("API key authentication is disabled")
     if not API_KEY_AUTH_ENABLED:
         logger.warning("API Key Authentication is DISABLED. Only username/password will work.")
-    logger.info(f"Auth Token Caching: {AUTH_TOKEN_CACHING}")
-    logger.info(f"Cache Persistence Enabled: {CACHE_PERSISTENCE_ENABLED}")
+    logger.info("Auth Token Caching: %s", AUTH_TOKEN_CACHING)
+    logger.info("Cache Persistence Enabled: %s", CACHE_PERSISTENCE_ENABLED)
 
     # Log pagination settings
     if PAGINATION_ENABLED:
-        logger.info(f"Pagination: {PAGINATION_ENABLED} (Items per page: {ITEMS_PER_PAGE})")
+        logger.info("Pagination: %s (Items per page: %s)", PAGINATION_ENABLED, ITEMS_PER_PAGE)
     else:
         logger.info(
-            f"Pagination: {PAGINATION_ENABLED} (Disabled - all items will be shown in feeds)")
+            "Pagination: %s (Disabled - all items will be shown in feeds)", PAGINATION_ENABLED)
 
-    logger.info(f"Log Level: {LOG_LEVEL}")
+    logger.info("Log Level: %s", LOG_LEVEL)
 
     if CACHE_PERSISTENCE_ENABLED:
         logger.info("Loading cache from disk...")
@@ -430,7 +442,7 @@ async def opds_root_redirect(
     Returns:
         RedirectResponse: Redirect to the user's OPDS root.
     """
-    username, token, display_name = auth_info
+    username, _token, display_name = auth_info
 
     if not username:
         # Check if authentication was disabled or failed because server is unavailable
@@ -1075,8 +1087,7 @@ async def get_cache_stats(_auth_info: tuple = Depends(require_auth)):
                       age information, and estimated size.
     """
     try:
-        # Import here to ensure we're using the same _cache instance
-        from opds_abs.utils.cache_utils import _cache as current_cache
+        current_cache = get_cache()
 
         now = time.time()
         stats = {
@@ -1162,8 +1173,6 @@ async def invalidate_specific_cache(
 
 async def _proxy_authenticated_image(url: str, token: str) -> Response:
     """Fetch an Audiobookshelf image using the authenticated OPDS token."""
-    import aiohttp
-
     headers = {"Authorization": f"Bearer {token}"}
     try:
         async with aiohttp.ClientSession() as session:
@@ -1242,9 +1251,6 @@ async def proxy_download(
     Returns:
         StreamingResponse: The file content stream
     """
-    from fastapi.responses import StreamingResponse
-    import aiohttp
-
     _username, token, _display_name = auth_info
 
     if not token:
@@ -1266,70 +1272,102 @@ async def proxy_download(
     headers = {"Authorization": f"Bearer {token}"}
     logger.debug("Making authenticated request to %s", url)
 
-    async def stream_file():
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(url, headers=headers) as response:
-                    response.raise_for_status()
-                    logger.debug(
-                        "Received successful response from Audiobookshelf API "
-                        "with status %s",
-                        response.status,
-                    )
-
-                    # Stream the response content
-                    async for chunk in response.content.iter_any():
-                        yield chunk
-
-            except aiohttp.ClientResponseError as e:
-                logger.error("Error proxying download: %s - %s", e.status, str(e))
-                # Re-raise as HTTPException with appropriate status
-                raise HTTPException(status_code=e.status, detail=f"Error fetching file: {str(e)}")
-            except Exception as e:
-                logger.error("Unexpected error proxying download: %s", str(e))
-                raise HTTPException(status_code=500, detail=f"Error downloading file: {str(e)}")
-
     try:
         # Make a HEAD request first to get content headers without downloading the file
-        response_headers = {}
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.head(url, headers=headers) as head_response:
-                    head_response.raise_for_status()
-
-                    # Get content type for proper MIME type handling
-                    content_type = head_response.headers.get(
-                        "Content-Type", "application/octet-stream")
-
-                    # Set the same headers we received from Audiobookshelf
-                    for header_name, header_value in head_response.headers.items():
-                        if header_name.lower() in (
-                                "content-type", "content-disposition", "content-length"):
-                            response_headers[header_name] = header_value
-
-                    logger.debug("Proxying download with content type: %s", content_type)
-
-                    # Make sure we have a content-disposition header for proper filename
-                    if "content-disposition" not in {
-                            k.lower(): v for k, v in response_headers.items()}:
-                        filename = f"book-{item_id}.epub"
-                        response_headers["Content-Disposition"] = (
-                            f'attachment; filename="{filename}"'
-                        )
-
-            except Exception as e:
-                logger.warning("Error making HEAD request, continuing without headers: %s", str(e))
-                # If HEAD request fails, we'll continue without the headers
-                content_type = "application/octet-stream"
-                response_headers = {}
+        content_type, response_headers = await _fetch_download_head_info(url, headers, item_id)
 
         # Return a streaming response with the file content and appropriate headers
         return StreamingResponse(
-            stream_file(),
+            _stream_download_file(url, headers),
             media_type=content_type,
             headers=response_headers
         )
 
     except Exception as e:
         logger.error("Error setting up download proxy: %s", str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to set up download: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to set up download: {str(e)}") from e
+
+
+async def _stream_download_file(url, headers):
+    """Stream a file's content from Audiobookshelf, translating errors to HTTPException.
+
+    Args:
+        url: The Audiobookshelf download URL.
+        headers: Request headers (including the Bearer auth token).
+
+    Yields:
+        bytes: Chunks of the file's content.
+
+    Raises:
+        HTTPException: If the upstream request fails.
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                logger.debug(
+                    "Received successful response from Audiobookshelf API "
+                    "with status %s",
+                    response.status,
+                )
+
+                # Stream the response content
+                async for chunk in response.content.iter_any():
+                    yield chunk
+
+        except aiohttp.ClientResponseError as e:
+            logger.error("Error proxying download: %s - %s", e.status, str(e))
+            # Re-raise as HTTPException with appropriate status
+            raise HTTPException(
+                status_code=e.status, detail=f"Error fetching file: {str(e)}") from e
+        except Exception as e:
+            logger.error("Unexpected error proxying download: %s", str(e))
+            raise HTTPException(
+                status_code=500, detail=f"Error downloading file: {str(e)}") from e
+
+
+async def _fetch_download_head_info(url, headers, item_id):
+    """HEAD the download URL to get its content type and forwardable headers.
+
+    Args:
+        url: The Audiobookshelf download URL.
+        headers: Request headers (including the Bearer auth token).
+        item_id: The item's ID (used only to build a fallback filename).
+
+    Returns:
+        tuple: (content_type, response_headers) - falls back to a generic
+            content type and empty headers if the HEAD request fails.
+    """
+    response_headers = {}
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.head(url, headers=headers) as head_response:
+                head_response.raise_for_status()
+
+                # Get content type for proper MIME type handling
+                content_type = head_response.headers.get(
+                    "Content-Type", "application/octet-stream")
+
+                # Set the same headers we received from Audiobookshelf
+                for header_name, header_value in head_response.headers.items():
+                    if header_name.lower() in (
+                            "content-type", "content-disposition", "content-length"):
+                        response_headers[header_name] = header_value
+
+                logger.debug("Proxying download with content type: %s", content_type)
+
+                # Make sure we have a content-disposition header for proper filename
+                if "content-disposition" not in {
+                        k.lower(): v for k, v in response_headers.items()}:
+                    filename = f"book-{item_id}.epub"
+                    response_headers["Content-Disposition"] = (
+                        f'attachment; filename="{filename}"'
+                    )
+
+                return content_type, response_headers
+
+        except Exception as e:
+            logger.warning("Error making HEAD request, continuing without headers: %s", str(e))
+            # If HEAD request fails, we'll continue without the headers
+            return "application/octet-stream", {}
