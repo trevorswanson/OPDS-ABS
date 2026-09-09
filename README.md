@@ -158,8 +158,9 @@ services:
 
 ## 🐳 Running from GitHub Container Registry (GHCR)
 
-You can use the pre-built Docker image:
-
+You can use the pre-built Docker image. `latest` tracks the newest tagged
+release; pin a specific version (e.g. `v0.5.0`, `0.5`, or `0`) if you want to
+control upgrades yourself.
 
 ```bash
 docker run -d -p 8000:8000 \

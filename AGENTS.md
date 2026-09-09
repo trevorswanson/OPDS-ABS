@@ -128,11 +128,15 @@ GitHub Actions workflows live in `.github/workflows/`:
   other quality gates.
 - `docstring-check.yml` runs documentation checks for Python changes.
 - `docker-image-dev.yml` builds and publishes the `dev` image as
-  `ghcr.io/trevorswanson/opds-abs:dev-<short-sha>`.
+  `ghcr.io/trevorswanson/opds-abs:dev` on every push to `dev`.
 - Keep this as the single dev-image workflow; do not add a duplicate workflow
   with the same trigger and output tag.
-- `docker-image.yml` builds and publishes `ghcr.io/trevorswanson/opds-abs:latest`
-  from `master`.
+- `release.yml` builds and publishes the versioned release image on push of a
+  `vX.Y.Z` tag: `ghcr.io/trevorswanson/opds-abs:vX.Y.Z`, `:X.Y`, `:X`, and
+  `:latest`, then creates a GitHub release with auto-generated notes.
+  `:latest` is only ever published here, so it always tracks the newest
+  tagged release rather than the newest `master` commit. `master` pushes are
+  validated (not published) by `quality.yml`'s `container-quality` job.
 
 Ruff and Pylint are development dependencies but are not required CI gates
 yet. The inherited codebase has a large existing warning/error baseline, and
@@ -157,6 +161,14 @@ Branch policy:
 - The intended promotion is `dev -> master`. GitHub's ruleset can enforce the
   pull request requirement but cannot natively require a specific source branch;
   do not silently promote another branch.
+
+Cutting a release: after `dev` is promoted to `master`, bump `__version__` in
+`opds_abs/__init__.py` to the new version, then push a `vX.Y.Z` tag pointing
+at that `master` commit. The tag push triggers `release.yml`, which publishes
+the versioned image and `:latest`, and creates the GitHub release. Follow
+semver: a bump is MAJOR/MINOR/PATCH based on the change to the public
+interface (env vars, endpoints, config compatibility), not the size of the
+diff.
 
 ## Change guidance
 
