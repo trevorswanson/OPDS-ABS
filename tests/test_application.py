@@ -323,6 +323,281 @@ class FeedAndRouteTests(unittest.IsolatedAsyncioTestCase):
         proxy.assert_awaited_once()
         self.assertIn("/items/book-1/cover", proxy.await_args.args[0])
 
+    def test_root_redirect_sends_mismatched_user_to_display_name(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            "bob", "token", "Bob")
+        try:
+            with patch.object(main, "AUTH_ENABLED", True):
+                with TestClient(main.app, follow_redirects=False) as test_client:
+                    response = test_client.get("/opds")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/opds/Bob")
+
+    def test_root_redirect_uses_anonymous_when_auth_disabled(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            None, None, None)
+        try:
+            with patch.object(main, "AUTH_ENABLED", False):
+                with TestClient(main.app, follow_redirects=False) as test_client:
+                    response = test_client.get("/opds")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/opds/anonymous")
+
+    def test_root_redirect_requires_authentication(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            None, None, None)
+        try:
+            with patch.object(main, "AUTH_ENABLED", True):
+                with TestClient(main.app, follow_redirects=False) as test_client:
+                    response = test_client.get("/opds")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("WWW-Authenticate", response.headers)
+
+    def test_nav_route_redirects_on_username_mismatch(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            "bob", "token", "Bob")
+        try:
+            with patch.object(main, "AUTH_ENABLED", True):
+                with TestClient(main.app, follow_redirects=False) as test_client:
+                    response = test_client.get("/opds/bob/libraries/lib-1")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/opds/Bob/libraries/lib-1")
+
+    def test_nav_route_serves_feed_when_username_matches(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            "Bob", "token", "Bob")
+        nav_mock = AsyncMock(return_value=main.Response(
+            content=b"<feed/>", media_type="application/atom+xml"))
+        try:
+            with patch.object(main, "AUTH_ENABLED", True), \
+                 patch.object(main.navigation_feed, "generate_navigation_feed", new=nav_mock):
+                with TestClient(main.app, follow_redirects=False) as test_client:
+                    response = test_client.get("/opds/Bob/libraries/lib-1")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 200)
+        nav_mock.assert_awaited_once_with("Bob", "lib-1", token="token")
+
+    def test_search_route_preserves_query_params_on_redirect(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            "bob", "token", "Bob")
+        try:
+            with patch.object(main, "AUTH_ENABLED", True):
+                with TestClient(main.app, follow_redirects=False) as test_client:
+                    response = test_client.get(
+                        "/opds/bob/libraries/lib-1/search", params={"q": "dune"})
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(
+            response.headers["location"], "/opds/Bob/libraries/lib-1/search?q=dune")
+
+    def test_series_items_route_serves_feed_for_matching_user(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            "Bob", "token", "Bob")
+        series_mock = AsyncMock(return_value=main.Response(
+            content=b"<feed/>", media_type="application/atom+xml"))
+        try:
+            with patch.object(main, "AUTH_ENABLED", True), \
+                 patch.object(main.series_feed, "generate_series_items_feed", new=series_mock):
+                with TestClient(main.app, follow_redirects=False) as test_client:
+                    response = test_client.get(
+                        "/opds/Bob/libraries/lib-1/series/series-1")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 200)
+        series_mock.assert_awaited_once_with(
+            "Bob", "lib-1", "series-1", token="token")
+
+    def test_admin_cache_stats_reports_entries(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.require_auth] = lambda: ("bob", "token", "Bob")
+        try:
+            with patch.object(
+                    main, "get_cache",
+                    return_value={"key12345": (time.time(), {"a": 1})}):
+                with TestClient(main.app) as test_client:
+                    response = test_client.get("/admin/cache/stats")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total_entries"], 1)
+        self.assertEqual(body["entries"][0]["key"], "key12345...")
+
+    def test_admin_cache_clear_reports_count(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.require_auth] = lambda: ("bob", "token", "Bob")
+        try:
+            with patch.object(main, "clear_cache", return_value=3):
+                with TestClient(main.app) as test_client:
+                    response = test_client.post("/admin/cache/clear")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["message"], "Cleared 3 items from cache")
+
+    def test_admin_cache_invalidate_requires_endpoint(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.require_auth] = lambda: ("bob", "token", "Bob")
+        try:
+            with TestClient(main.app) as test_client:
+                response = test_client.post("/admin/cache/invalidate")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 404)
+
+    def test_resource_not_found_error_returns_generic_xml_message(self):
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            "Bob", "token", "Bob")
+        root_mock = AsyncMock(side_effect=main.ResourceNotFoundError("book xyz missing"))
+        try:
+            with patch.object(main, "AUTH_ENABLED", True), \
+                 patch.object(main.library_feed, "generate_root_feed", new=root_mock):
+                with TestClient(main.app) as test_client:
+                    response = test_client.get("/opds/Bob")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"<message>Resource not found</message>", response.content)
+
+    def test_authentication_error_inside_route_returns_generic_401_xml(self):
+        """Verify handle_exception (not the dedicated handler) handles this.
+
+        AuthenticationError raised while building a feed is caught by the
+        route's own try/except and rendered via handle_exception - it never
+        reaches the dedicated authentication_error_handler (that only fires
+        for exceptions raised outside the route body, e.g. in a dependency),
+        so no WWW-Authenticate header is added here.
+        """
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            "Bob", "token", "Bob")
+        nav_mock = AsyncMock(side_effect=main.AuthenticationError("token expired"))
+        try:
+            with patch.object(main, "AUTH_ENABLED", True), \
+                 patch.object(main.navigation_feed, "generate_navigation_feed", new=nav_mock):
+                with TestClient(main.app) as test_client:
+                    response = test_client.get("/opds/Bob/libraries/lib-1")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn("WWW-Authenticate", response.headers)
+        self.assertIn(b"<message>Authentication failed</message>", response.content)
+
+    def test_api_client_error_inside_route_returns_generic_502_xml(self):
+        """Verify handle_exception (not the dedicated handler) handles this.
+
+        Same as above for APIClientError: caught by the route's own
+        try/except (status_code=502 per the exception class), not the
+        dedicated api_client_error_handler.
+        """
+        from opds_abs import main
+
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            "Bob", "token", "Bob")
+        nav_mock = AsyncMock(side_effect=main.APIClientError("upstream unreachable"))
+        try:
+            with patch.object(main, "AUTH_ENABLED", True), \
+                 patch.object(main.navigation_feed, "generate_navigation_feed", new=nav_mock):
+                with TestClient(main.app) as test_client:
+                    response = test_client.get("/opds/Bob/libraries/lib-1")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 502)
+        self.assertIn(
+            b"<message>Error communicating with Audiobookshelf</message>", response.content)
+
+    def test_authentication_error_handler_fires_outside_route_body(self):
+        """Verify the dedicated authentication_error_handler fires here.
+
+        AuthenticationError raised from a dependency (before the route
+        body's try/except runs) reaches the dedicated app-level handler,
+        which - unlike handle_exception - includes the specific message and
+        a WWW-Authenticate header.
+        """
+        from opds_abs import main
+
+        async def raise_authentication_error(_request=None):
+            raise main.AuthenticationError("token expired")
+
+        main.app.dependency_overrides[main.get_authenticated_user] = raise_authentication_error
+        try:
+            with TestClient(main.app) as test_client:
+                response = test_client.get("/opds/Bob/libraries/lib-1")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("WWW-Authenticate", response.headers)
+        self.assertIn(b"<message>token expired</message>", response.content)
+        self.assertIn(b"Authentication for user Bob, library lib-1", response.content)
+
+    def test_api_client_error_handler_fires_outside_route_body(self):
+        """Verify the dedicated api_client_error_handler fires here.
+
+        APIClientError raised from a dependency reaches the dedicated
+        api_client_error_handler (503, specific message verbatim, path-
+        derived context), rather than being caught by the route body.
+        """
+        from opds_abs import main
+
+        async def raise_api_client_error(_request=None):
+            raise main.APIClientError("upstream unreachable")
+
+        main.app.dependency_overrides[main.get_authenticated_user] = raise_api_client_error
+        try:
+            with TestClient(main.app) as test_client:
+                response = test_client.get("/opds/Bob/libraries/lib-1")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 503)
+        self.assertIn(b"<message>upstream unreachable</message>", response.content)
+        self.assertIn(b"Generating items feed for user Bob, library lib-1", response.content)
+
+    def test_service_unavailable_from_auth_returns_503_xml(self):
+        from opds_abs import main
+
+        async def raise_service_unavailable(_request=None):
+            raise HTTPException(
+                status_code=503, detail="Audiobookshelf server is unavailable")
+
+        main.app.dependency_overrides[main.get_authenticated_user] = raise_service_unavailable
+        try:
+            with TestClient(main.app) as test_client:
+                response = test_client.get("/opds/Bob/libraries/lib-1")
+        finally:
+            main.app.dependency_overrides.clear()
+        self.assertEqual(response.status_code, 503)
+        self.assertIn(b"Audiobookshelf server is unavailable", response.content)
+
 
 class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
     """Verify author, collection, series, search, and library contracts."""
@@ -376,6 +651,31 @@ class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
         }]})
         self.assertEqual([book["id"] for book in filtered[0]["books"]], ["book-1"])
 
+    async def test_series_items_fallback_substitutes_library_id_in_url(self):
+        """Regression test for a missing f-string prefix in the fallback URL.
+
+        Previously left a literal "{library_id}" in the fallback API URL
+        when a series has no book IDs.
+        """
+        from opds_abs.feeds.series_feed import SeriesFeedGenerator
+
+        generator = SeriesFeedGenerator()
+        fetch_mock = AsyncMock(return_value={"results": [
+            {"id": "book-1", "media": {"ebookFormat": "epub"}},
+        ]})
+        with patch(
+                "opds_abs.feeds.series_feed.get_cached_series_details",
+                new=AsyncMock(return_value={
+                    "id": "series-1", "name": "Empty Series", "books": []})), \
+             patch("opds_abs.feeds.series_feed.fetch_from_api", new=fetch_mock):
+            filtered_items, series_details = await generator.filter_items_by_series_id(
+                "alice", "lib-42", "series-1", token="tok")
+
+        requested_url = fetch_mock.call_args.args[0]
+        self.assertEqual(requested_url, "/libraries/lib-42/items")
+        self.assertEqual([item["id"] for item in filtered_items], ["book-1"])
+        self.assertEqual(series_details["authorName"], "Unknown Author")
+
     async def test_search_without_query_returns_valid_empty_feed(self):
         from opds_abs.feeds.search_feed import SearchFeedGenerator
 
@@ -401,6 +701,96 @@ class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
             response = await LibraryFeedGenerator().generate_root_feed("alice", token="token")
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["location"], "/opds/alice/libraries/lib-1")
+
+    async def test_library_root_lists_all_libraries_when_more_than_one(self):
+        from opds_abs.feeds.library_feed import LibraryFeedGenerator
+
+        libraries = {"libraries": [
+            {"id": "lib-1", "name": "Fiction"}, {"id": "lib-2", "name": "Non-Fiction"}]}
+        with patch(
+                "opds_abs.feeds.library_feed.fetch_from_api",
+                new=AsyncMock(return_value=libraries)):
+            response = await LibraryFeedGenerator().generate_root_feed("alice", token="token")
+        body = response.body.decode()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Fiction", body)
+        self.assertIn("Non-Fiction", body)
+        self.assertIn("/opds/alice/libraries/lib-1", body)
+        self.assertIn("/opds/alice/libraries/lib-2", body)
+
+    async def test_library_items_feed_lists_ebooks_from_api(self):
+        from opds_abs.feeds.library_feed import LibraryFeedGenerator
+
+        items_data = {"results": [
+            {"id": "book-1", "addedAt": 1,
+             "media": {"ebookFormat": "epub", "metadata": {"title": "Dune"}}},
+        ]}
+        ebook_inos = [{"ino": "999", "filename": "dune.epub", "download_url": "", "token": "tok"}]
+        with patch(
+                "opds_abs.feeds.library_feed.fetch_from_api",
+                new=AsyncMock(return_value=items_data)), \
+             patch(
+                "opds_abs.feeds.library_feed.get_download_urls_from_item",
+                new=AsyncMock(return_value=ebook_inos)):
+            response = await LibraryFeedGenerator().generate_library_items_feed(
+                "alice", "lib-1", params={}, token="token")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Dune", response.body.decode())
+
+    async def test_authors_feed_lists_authors_with_ebooks(self):
+        from opds_abs.feeds.author_feed import AuthorFeedGenerator
+
+        generator = AuthorFeedGenerator()
+        authors = [{"id": "author-1", "name": "Frank Herbert", "ebook_count": 1}]
+        with patch.object(
+                generator, "get_authors_with_ebooks", new=AsyncMock(return_value=authors)):
+            response = await generator.generate_authors_feed("alice", "lib-1", token="token")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Frank Herbert", response.body.decode())
+
+    async def test_authors_feed_reports_when_no_authors_have_ebooks(self):
+        from opds_abs.feeds.author_feed import AuthorFeedGenerator
+
+        generator = AuthorFeedGenerator()
+        with patch.object(
+                generator, "get_authors_with_ebooks", new=AsyncMock(return_value=[])):
+            response = await generator.generate_authors_feed("alice", "lib-1", token="token")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("No authors with ebooks found", response.body.decode())
+
+    async def test_collections_feed_lists_collections_with_ebooks(self):
+        from opds_abs.feeds.collection_feed import CollectionFeedGenerator
+
+        async def fake_fetch(url, *args, **kwargs):
+            if url.endswith("/collections"):
+                return {"results": [{"id": "col-1", "name": "Favorites"}]}
+            return {
+                "id": "col-1", "name": "Favorites",
+                "books": [{"id": "book-1", "media": {"ebookFormat": "epub"}}],
+            }
+
+        generator = CollectionFeedGenerator()
+        with patch(
+                "opds_abs.feeds.collection_feed.fetch_from_api",
+                new=AsyncMock(side_effect=fake_fetch)):
+            response = await generator.generate_collections_feed(
+                "alice", "lib-1", token="token")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Favorites", response.body.decode())
+
+    async def test_search_feed_with_query_returns_valid_feed(self):
+        from opds_abs.feeds.search_feed import SearchFeedGenerator
+
+        with patch(
+                "opds_abs.feeds.search_feed.get_cached_search_results",
+                new=AsyncMock(return_value={})), \
+             patch(
+                "opds_abs.feeds.search_feed.get_cached_library_items",
+                new=AsyncMock(return_value=[])):
+            response = await SearchFeedGenerator().generate_search_feed(
+                "alice", "lib-1", {"q": "dune"}, token="token")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Search results for: dune", response.body.decode())
 
 
 if __name__ == "__main__":
