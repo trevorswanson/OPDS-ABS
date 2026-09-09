@@ -37,33 +37,22 @@ CACHE_EXPIRY_MAPPING = {
 }
 
 
-async def fetch_from_api(
-    endpoint: str,
-    params: Dict[str, Any] = None,
-    username: str = None,
-    token: str = None,
-    bypass_cache: bool = False
-) -> Dict[str, Any]:
-    """Fetch data from Audiobookshelf API with caching support.
-
-    Makes an authenticated request to the Audiobookshelf API using the user token.
-    Results are cached based on endpoint type to improve performance on subsequent calls.
+def _resolve_auth_token(username, token, params):
+    """Resolve the auth token to use for an API call, consuming it from params if present.
 
     Args:
-        endpoint (str): The API endpoint to call (e.g., "/items/123").
-        params (dict, optional): Query parameters to include in the request.
         username (str, optional): Username to use for authentication.
-        token (str, optional): User-specific auth token from Audiobookshelf login.
-        bypass_cache (bool, optional): If True, bypass cache and force a fresh API call.
+        token (str, optional): A token already supplied by the caller.
+        params (dict): Query parameters; 'token'/'api_key' are popped out if present.
 
     Returns:
-        dict: The JSON response data from the API.
+        str or None: The resolved token, or None if authentication is disabled
+            or no token could be found.
 
     Raises:
-        HTTPException: If the API request fails or times out.
+        AuthenticationError: If authentication is enabled but no token could be
+            found for the user.
     """
-    params = params.copy() if params else {}
-
     # Try to get a token if one wasn't provided
     if token is None and username is not None:
         # Check if token is in the params
@@ -90,21 +79,230 @@ async def fetch_from_api(
         logger.debug("Authentication disabled, proceeding without token")
         token = None
 
-    # Set up auth header if we have a token
+    return token
+
+
+def _build_auth_headers(token, endpoint):
+    """Build request headers, adding a Bearer auth header when a token is present.
+
+    Args:
+        token (str, optional): The auth token to use, if any.
+        endpoint (str): The API endpoint being called (used for logging only).
+
+    Returns:
+        dict: The headers to send with the request.
+    """
     headers = {}
     if token:
-        auth_header = f"Bearer {token}"
-        headers["Authorization"] = auth_header
+        headers["Authorization"] = f"Bearer {token}"
         logger.debug("Using Bearer token authentication for API call to %s", endpoint)
     else:
         logger.warning("No token for API call to %s", endpoint)
+    return headers
 
-    # Determine the cache expiry time based on the endpoint
-    cache_expiry = DEFAULT_CACHE_EXPIRY
+
+def _get_cache_expiry_for_endpoint(endpoint):
+    """Determine the cache expiry time to use for a given API endpoint.
+
+    Args:
+        endpoint (str): The API endpoint being called.
+
+    Returns:
+        int: The cache expiry in seconds for this endpoint's category.
+    """
     for key, expiry in CACHE_EXPIRY_MAPPING.items():
         if key in endpoint:
-            cache_expiry = expiry
-            break
+            return expiry
+    return DEFAULT_CACHE_EXPIRY
+
+
+async def _get_json_with_cache(session, url, params, headers, cache_key):
+    """Issue the GET request and cache a successful JSON response.
+
+    Args:
+        session (aiohttp.ClientSession): The session to issue the request on.
+        url (str): The URL to request.
+        params (dict): Query parameters for the request.
+        headers (dict): Headers for the request.
+        cache_key (str): The cache key to store a successful response under.
+
+    Returns:
+        dict: The JSON response data.
+
+    Raises:
+        asyncio.TimeoutError: If the request times out.
+        aiohttp.ClientResponseError: If the server returns an error status.
+    """
+    async with session.get(url, params=params, headers=headers) as response:
+        response.raise_for_status()
+        data = await response.json()
+        cache_set(cache_key, data)
+        return data
+
+
+def _handle_response_error(resp_error, token, username, url):
+    """Raise the appropriate exception for a failed Audiobookshelf API response.
+
+    Args:
+        resp_error (aiohttp.ClientResponseError): The response error that occurred.
+        token (str, optional): The token used for the request, if any.
+        username (str, optional): The username the request was made for, if any.
+        url (str): The URL that was requested (used for logging).
+
+    Raises:
+        AuthenticationError: If the response was a 401/403.
+        APIClientError: For any other response error status.
+    """
+    log_error(resp_error, context=f"API call to {url}")
+
+    # Check if this might be an authentication error
+    if resp_error.status in (401, 403):
+        token_info = "Token present" if token else "No token"
+        logger.error("Authentication error (%s) for %s: %s",
+                     token_info, url, str(resp_error))
+
+        # Invalidate token cache on auth errors to force re-authentication
+        if username and username in TOKEN_CACHE:
+            del TOKEN_CACHE[username]
+            logger.debug("Invalidated token cache for %s due to auth error", username)
+
+        raise AuthenticationError(
+            f"Authentication failed for Audiobookshelf API: {str(resp_error)}"
+        ) from resp_error
+
+    # For other response errors, provide a clearer message
+    error_msg = f"Audiobookshelf API error (status {resp_error.status}): {str(resp_error)}"
+    raise APIClientError(error_msg) from resp_error
+
+
+def _fallback_cached_data(request_ctx):
+    """Return expired cached data to use as a fallback when the server is unreachable.
+
+    Args:
+        request_ctx (dict): The request context (cache_key, cache_expiry, bypass_cache, endpoint).
+
+    Returns:
+        The cached data if available and not bypassing cache, else None.
+    """
+    if request_ctx["bypass_cache"]:
+        return None
+
+    cached_data = cache_get(
+        request_ctx["cache_key"], request_ctx["cache_expiry"], ignore_expiry=True)
+    if cached_data is not None:
+        logger.debug(
+            "Using expired cache data for %s because server is unreachable",
+            request_ctx["endpoint"],
+        )
+    return cached_data
+
+
+def _raise_connection_error(conn_error, request_ctx):
+    """Log a connection failure and raise a clear APIClientError for it.
+
+    Args:
+        conn_error (aiohttp.ClientConnectorError): The connection error that occurred.
+        request_ctx (dict): The request context (endpoint).
+
+    Raises:
+        APIClientError: Always, describing the unreachable Audiobookshelf host.
+    """
+    # This happens when the server is down or unreachable - log as ERROR but without traceback
+    error_id = id(conn_error)
+    logger.error("ERROR [%s]: Cannot connect to Audiobookshelf server at %s (API endpoint: %s)",
+                 error_id, AUDIOBOOKSHELF_API, request_ctx["endpoint"])
+
+    # Extract hostname for clearer error message
+    url_parts = AUDIOBOOKSHELF_INTERNAL_URL.split('//')
+    host_info = url_parts[1] if len(url_parts) > 1 else AUDIOBOOKSHELF_INTERNAL_URL
+
+    raise APIClientError(
+        (
+            f"Cannot connect to Audiobookshelf server at {host_info}. "
+            "Please ensure it's running and accessible."
+        )
+    ) from None  # Use "from None" to suppress the traceback in the logs
+
+
+async def _fetch_via_http(request_ctx):
+    """Perform the HTTP GET for fetch_from_api(), with error handling and caching.
+
+    Args:
+        request_ctx (dict): endpoint, url, params, headers, token, username,
+            cache_key, cache_expiry, bypass_cache - see fetch_from_api().
+
+    Returns:
+        dict: The JSON response data from the API (or cached fallback data).
+
+    Raises:
+        APIClientError: If the request fails, times out, or the server is unreachable.
+        AuthenticationError: If the request fails with a 401/403 status.
+    """
+    url = request_ctx["url"]
+    params = request_ctx["params"]
+    headers = request_ctx["headers"]
+    token = request_ctx["token"]
+    username = request_ctx["username"]
+    cache_key = request_ctx["cache_key"]
+
+    try:
+        # Use a shorter timeout for faster failure detection when server is down
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            try:
+                return await _get_json_with_cache(session, url, params, headers, cache_key)
+            except asyncio.TimeoutError as timeout_error:
+                logger.error("Timeout connecting to Audiobookshelf API at %s", url)
+                raise APIClientError(
+                    (
+                        "Audiobookshelf server is not responding. "
+                        "Please ensure it's running and accessible."
+                    )
+                ) from timeout_error
+            except aiohttp.ClientResponseError as resp_error:
+                _handle_response_error(resp_error, token, username, url)
+    except aiohttp.ClientConnectorError as conn_error:
+        # Check if we have cached data we can use as a fallback
+        cached_data = _fallback_cached_data(request_ctx)
+        if cached_data is not None:
+            return cached_data
+        _raise_connection_error(conn_error, request_ctx)
+    except Exception as e:
+        log_error(e, context=f"API call to {url}")
+        raise APIClientError(
+            f"Error communicating with Audiobookshelf API: {str(e)}"
+        ) from e
+
+
+async def fetch_from_api(
+    endpoint: str,
+    params: Dict[str, Any] = None,
+    username: str = None,
+    token: str = None,
+    bypass_cache: bool = False
+) -> Dict[str, Any]:
+    """Fetch data from Audiobookshelf API with caching support.
+
+    Makes an authenticated request to the Audiobookshelf API using the user token.
+    Results are cached based on endpoint type to improve performance on subsequent calls.
+
+    Args:
+        endpoint (str): The API endpoint to call (e.g., "/items/123").
+        params (dict, optional): Query parameters to include in the request.
+        username (str, optional): Username to use for authentication.
+        token (str, optional): User-specific auth token from Audiobookshelf login.
+        bypass_cache (bool, optional): If True, bypass cache and force a fresh API call.
+
+    Returns:
+        dict: The JSON response data from the API.
+
+    Raises:
+        HTTPException: If the API request fails or times out.
+    """
+    params = params.copy() if params else {}
+    token = _resolve_auth_token(username, token, params)
+    headers = _build_auth_headers(token, endpoint)
+    cache_expiry = _get_cache_expiry_for_endpoint(endpoint)
 
     # Create a cache key for this request
     cache_key = _create_cache_key(endpoint, params, username)
@@ -120,91 +318,18 @@ async def fetch_from_api(
     url = f"{AUDIOBOOKSHELF_API}{endpoint}"
     logger.debug("📡 Fetching: %s%s", url, ' with params ' + str(params) if params else '')
 
-    try:
-        # Use a shorter timeout for faster failure detection when server is down
-        timeout = aiohttp.ClientTimeout(total=5)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            try:
-                async with session.get(
-                            url,
-                            params=params,
-                            headers=headers
-                        ) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-
-                    # Store in cache
-                    cache_set(cache_key, data)
-                    return data
-            except asyncio.TimeoutError as timeout_error:
-                context = f"API call to {url}"
-                logger.error("Timeout connecting to Audiobookshelf API at %s", url)
-                raise APIClientError(
-                    (
-                        "Audiobookshelf server is not responding. "
-                        "Please ensure it's running and accessible."
-                    )
-                ) from timeout_error
-            except aiohttp.ClientResponseError as resp_error:
-                context = f"API call to {url}"
-                log_error(resp_error, context=context)
-
-                # Check if this might be an authentication error
-                if resp_error.status in (401, 403):
-                    token_info = "Token present" if token else "No token"
-                    logger.error("Authentication error (%s) for %s: %s",
-                                 token_info, url, str(resp_error))
-
-                    # Invalidate token cache on auth errors to force re-authentication
-                    if username and username in TOKEN_CACHE:
-                        del TOKEN_CACHE[username]
-                        logger.debug("Invalidated token cache for %s due to auth error", username)
-
-                    raise AuthenticationError(
-                        f"Authentication failed for Audiobookshelf API: {str(resp_error)}"
-                    ) from resp_error
-
-                # For other response errors, provide a clearer message
-                error_msg = (
-                    f"Audiobookshelf API error (status {resp_error.status}): "
-                    f"{str(resp_error)}"
-                )
-                raise APIClientError(error_msg) from resp_error
-    except aiohttp.ClientConnectorError as conn_error:
-        # This happens when the server is down or unreachable - log as ERROR but without traceback
-        error_id = id(conn_error)
-        logger.error("ERROR [%s]: Cannot connect to Audiobookshelf server at %s (API endpoint: %s)",
-                     error_id, AUDIOBOOKSHELF_API, endpoint)
-
-        # Check if we have cached data we can use as a fallback
-        if not bypass_cache:
-            cached_data = cache_get(cache_key, cache_expiry, ignore_expiry=True)
-            if cached_data is not None:
-                logger.debug(
-                    "Using expired cache data for %s because server is unreachable",
-                    endpoint,
-                )
-                return cached_data
-
-        # Extract hostname for clearer error message
-        url_parts = AUDIOBOOKSHELF_INTERNAL_URL.split('//')
-        if len(url_parts) > 1:
-            host_info = url_parts[1]
-        else:
-            host_info = AUDIOBOOKSHELF_INTERNAL_URL
-
-        raise APIClientError(
-            (
-                f"Cannot connect to Audiobookshelf server at {host_info}. "
-                "Please ensure it's running and accessible."
-            )
-        ) from None  # Use "from None" to suppress the traceback in the logs
-    except Exception as e:
-        context = f"API call to {url}"
-        log_error(e, context=context)
-        raise APIClientError(
-            f"Error communicating with Audiobookshelf API: {str(e)}"
-        ) from e
+    request_ctx = {
+        "endpoint": endpoint,
+        "url": url,
+        "params": params,
+        "headers": headers,
+        "token": token,
+        "username": username,
+        "cache_key": cache_key,
+        "cache_expiry": cache_expiry,
+        "bypass_cache": bypass_cache,
+    }
+    return await _fetch_via_http(request_ctx)
 
 
 @cached(expiry=LIBRARY_ITEMS_CACHE_EXPIRY)
