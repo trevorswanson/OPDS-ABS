@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 
 # Cache dictionary: key -> (timestamp, data)
 _cache: Dict[str, Tuple[float, Any]] = {}
-LAST_SAVE_TIME = 0
+# Mutable container so save_cache_to_disk() can update the timestamp without `global`.
+_save_state = {"last_save_time": 0.0}
 _cache_lock = threading.RLock()
 
 
@@ -84,8 +85,6 @@ def load_cache_from_disk() -> None:
         IOError: If there is an error reading the cache file.
         EOFError: If the cache file is empty or corrupted.
     """
-    global _cache
-
     if not CACHE_PERSISTENCE_ENABLED:
         logger.debug("Cache persistence is disabled, skipping load from disk")
         return
@@ -106,7 +105,8 @@ def load_cache_from_disk() -> None:
         with cache_path.open("rb") as f:
             with _cache_lock:
                 loaded_cache = pickle.load(f)
-                _cache = loaded_cache
+                _cache.clear()
+                _cache.update(loaded_cache)
 
         # Count non-expired items
         current_time = time.time()
@@ -118,7 +118,7 @@ def load_cache_from_disk() -> None:
     except (pickle.PickleError, IOError, EOFError) as e:
         logger.warning("Failed to load cache from disk: %s", str(e))
         # Start with an empty cache if loading fails
-        _cache = {}
+        _cache.clear()
 
 
 def save_cache_to_disk() -> None:
@@ -136,8 +136,6 @@ def save_cache_to_disk() -> None:
         pickle.PickleError: If there is an error pickling the cache data.
         IOError: If there is an error writing to the cache file.
     """
-    global LAST_SAVE_TIME
-
     if not CACHE_PERSISTENCE_ENABLED:
         return
 
@@ -146,7 +144,7 @@ def save_cache_to_disk() -> None:
     # Use a lock to prevent concurrent access during save
     with _cache_lock:
         # Only save if enough time has passed since last save
-        if current_time - LAST_SAVE_TIME < CACHE_SAVE_INTERVAL:
+        if current_time - _save_state["last_save_time"] < CACHE_SAVE_INTERVAL:
             return
 
         # Clean expired items before saving
@@ -159,7 +157,7 @@ def save_cache_to_disk() -> None:
             del _cache[key]
 
         # Update last save time
-        LAST_SAVE_TIME = current_time
+        _save_state["last_save_time"] = current_time
 
     try:
         cache_path = Path(CACHE_FILE_PATH)
@@ -215,16 +213,14 @@ def cache_set(key: str, data: Any) -> None:
         _cache[key] = (time.time(), data)
 
     # Schedule background save if enough time has passed
-    if CACHE_PERSISTENCE_ENABLED and time.time() - LAST_SAVE_TIME >= CACHE_SAVE_INTERVAL:
+    time_since_save = time.time() - _save_state["last_save_time"]
+    if CACHE_PERSISTENCE_ENABLED and time_since_save >= CACHE_SAVE_INTERVAL:
         # Use a thread to save the cache without blocking
         threading.Thread(target=save_cache_to_disk, daemon=True).start()
 
 
 def get_cache() -> Dict[str, Tuple[float, Any]]:
-    """Return the current in-memory cache dictionary instance.
-
-    Looked up fresh on each call so callers keep seeing the live cache
-    even after load_cache_from_disk() rebinds the module-level _cache.
+    """Return the in-memory cache dictionary instance.
 
     Returns:
         Dict[str, Tuple[float, Any]]: The cache mapping keys to (timestamp, data).
