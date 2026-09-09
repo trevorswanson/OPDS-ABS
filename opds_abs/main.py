@@ -495,11 +495,11 @@ async def search_xml(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name,
             f"/libraries/{library_id}/search.xml")
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         params = dict(request.query_params)
         # Explicitly escape values reflected into the template. Jinja2Templates
@@ -536,10 +536,10 @@ async def opds_root(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name, "")
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         return await library_feed.generate_root_feed(
             effective_username,
@@ -574,10 +574,10 @@ async def opds_nav(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name, f"/libraries/{library_id}")
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         return await navigation_feed.generate_navigation_feed(
             effective_username,
@@ -615,12 +615,12 @@ async def opds_search(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name,
             f"/libraries/{library_id}/search",
             query_params=dict(request.query_params))
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         params = dict(request.query_params)
         return await search_feed.generate_search_feed(
@@ -667,12 +667,12 @@ async def opds_library(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name,
             f"/libraries/{library_id}/items",
             query_params=dict(request.query_params))
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         params = dict(request.query_params)
 
@@ -715,10 +715,10 @@ async def opds_series(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name, f"/libraries/{library_id}/series")
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         return await series_feed.generate_series_feed(
             effective_username,
@@ -765,11 +765,11 @@ async def opds_series_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name,
             f"/libraries/{library_id}/series/{series_id}")
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         return await series_feed.generate_series_items_feed(
             effective_username,
@@ -809,10 +809,10 @@ async def opds_collections(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name, f"/libraries/{library_id}/collections")
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         return await collection_feed.generate_collections_feed(
             effective_username,
@@ -850,11 +850,11 @@ async def opds_collection_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name,
             f"/libraries/{library_id}/collections/{collection_id}")
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         return await collection_feed.generate_collection_items_feed(
             effective_username,
@@ -894,10 +894,10 @@ async def opds_authors(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name, f"/libraries/{library_id}/authors")
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         return await author_feed.generate_authors_feed(
             effective_username,
@@ -935,11 +935,11 @@ async def opds_author_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = resolve_effective_username(
+        effective_username, redirect = resolve_effective_username(
             auth_username, username, display_name,
             f"/libraries/{library_id}/authors/{author_id}")
-        if isinstance(effective_username, RedirectResponse):
-            return effective_username
+        if redirect is not None:
+            return redirect
 
         return await author_feed.generate_author_items_feed(
             effective_username,

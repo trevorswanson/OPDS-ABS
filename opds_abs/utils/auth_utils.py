@@ -54,7 +54,7 @@ Option 2: Bearer Token (for direct API access)
 """
 import base64
 import logging
-from typing import Optional, Tuple, Dict, Union
+from typing import Optional, Tuple, Dict
 from urllib.parse import urlparse
 import aiohttp
 
@@ -753,7 +753,7 @@ def resolve_effective_username(
         username: str,
         display_name: Optional[str],
         path_suffix: str,
-        query_params: Optional[Dict[str, str]] = None) -> Union[str, RedirectResponse]:
+        query_params: Optional[Dict[str, str]] = None) -> Tuple[str, Optional[RedirectResponse]]:
     """Resolve which username a route should serve, redirecting if needed.
 
     Audiobookshelf's display_name comes from its authentication response
@@ -769,13 +769,16 @@ def resolve_effective_username(
         query_params: Optional query parameters to preserve on the redirect.
 
     Returns:
-        str: The effective username to use, if no redirect is needed.
-        RedirectResponse: A redirect to the canonical URL, if the requested
-            username doesn't match the authenticated display_name.
+        tuple: (effective_username, redirect) - the username a route should
+            serve, and a RedirectResponse a route must return immediately
+            instead (or None if no redirect is needed). Kept as two
+            separately-typed values, rather than a single str-or-Response
+            union, so callers - and static analysis - can't mistake one for
+            the other.
     """
     effective_username = display_name if auth_username else username
     if not (AUTH_ENABLED and auth_username and username != display_name):
-        return effective_username
+        return effective_username, None
 
     target = f"/opds/{display_name}{path_suffix}"
     if query_params:
@@ -789,11 +792,11 @@ def resolve_effective_username(
         # absolute or protocol-relative redirect regardless of
         # display_name's contents.
         # codeql[py/url-redirection]
-        return RedirectResponse(url=target)
+        return None, RedirectResponse(url=target)
     # display_name failed validation; fail closed by serving the
     # already-routed (framework-constrained) username instead of
     # building another redirect target out of further request data.
-    return username
+    return username, None
 
 
 def get_token_for_username(username: str) -> Optional[str]:
