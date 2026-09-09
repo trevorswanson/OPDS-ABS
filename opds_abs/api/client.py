@@ -139,7 +139,7 @@ async def fetch_from_api(
                 context = f"API call to {url}"
                 logger.error("Timeout connecting to Audiobookshelf API at %s", url)
                 raise APIClientError(
-                    f"Audiobookshelf server is not responding. Please ensure it's running and accessible."
+                    "Audiobookshelf server is not responding. Please ensure it's running and accessible."
                 ) from timeout_error
             except aiohttp.ClientResponseError as resp_error:
                 context = f"API call to {url}"

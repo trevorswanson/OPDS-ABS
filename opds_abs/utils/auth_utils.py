@@ -164,7 +164,7 @@ async def authenticate_with_audiobookshelf(username: str, password: str, api_key
         # Re-raise authentication errors without modification
         raise
     except Exception as e:
-        context = f"Processing authentication response from Audiobookshelf"
+        context = "Processing authentication response from Audiobookshelf"
         log_error(e, context=context)
         raise AuthenticationError(f"Authentication error: {str(e)}") from e
 
@@ -191,7 +191,7 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
             try:
                 # Log what we're about to do
                 logger.debug(f"Making API request to: {verify_url}")
-                logger.debug(f"With Bearer token authentication")
+                logger.debug("With Bearer token authentication")
 
                 # The API key is used as the Bearer token for this request
                 async with session.get(
@@ -249,7 +249,7 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
                             if post_response.status != 200:
                                 error_text = await post_response.text()
                                 logger.warning(f"API key authentication failed on POST /api/authorize: Status {post_response.status} - {error_text}")
-                                raise AuthenticationError(f"API key authentication failed with all methods")
+                                raise AuthenticationError("API key authentication failed with all methods")
 
                             data = await post_response.json()
                             logger.debug(f"API response data (POST): {data}")
@@ -289,7 +289,7 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
         # Re-raise authentication errors without modification
         raise
     except Exception as e:
-        context = f"Processing API key authentication response from Audiobookshelf"
+        context = "Processing API key authentication response from Audiobookshelf"
         log_error(e, context=context)
         raise AuthenticationError(f"API key authentication error: {str(e)}") from e
 
@@ -474,7 +474,7 @@ async def verify_credentials(request: Request) -> Tuple[Optional[str], Optional[
 
     # Special case: API key was provided but API key authentication is disabled
     if api_key and not API_KEY_AUTH_ENABLED:
-        logger.warning(f"API key was provided but API_KEY_AUTH_ENABLED is false, authentication will fail")
+        logger.warning("API key was provided but API_KEY_AUTH_ENABLED is false, authentication will fail")
         raise AuthenticationError(
             "API key authentication is disabled. Please use username/password or enable API_KEY_AUTH_ENABLED."
         )
@@ -491,7 +491,7 @@ async def verify_credentials(request: Request) -> Tuple[Optional[str], Optional[
             )
         logger.debug(f"Attempting username/password authentication for user: {username}")
     else:
-        logger.debug(f"No valid credentials found in request")
+        logger.debug("No valid credentials found in request")
         return None, None, None
 
     # API key authentication
@@ -528,7 +528,7 @@ async def verify_credentials(request: Request) -> Tuple[Optional[str], Optional[
             raise
 
     # Invalid credentials combination
-    logger.warning(f"Invalid credential combination in request")
+    logger.warning("Invalid credential combination in request")
     return None, None, None
 
 async def get_authenticated_user(request: Request) -> Tuple[Optional[str], Optional[str], Optional[str]]:
