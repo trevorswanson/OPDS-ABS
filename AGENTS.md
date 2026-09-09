@@ -45,13 +45,10 @@ The runtime path is:
 
 ### Configuration
 
-`opds_abs/config.py` is the authoritative configuration module. It reads
-environment variables for Audiobookshelf internal/external URLs, auth,
-cache, pagination, logging, and `OPDS_RELOAD`.
-
-The root `config.py` is a legacy compatibility module. Do not add new settings
-there; update `opds_abs/config.py` and document externally visible settings in
-`README.md`.
+`opds_abs/config.py` is the sole application configuration module. It reads
+environment variables for Audiobookshelf internal/external URLs, auth, cache,
+pagination, logging, and `OPDS_RELOAD`. Do not add a second root-level
+configuration module; document externally visible settings in `README.md`.
 
 Production/container defaults must keep `OPDS_RELOAD=false`. Set
 `OPDS_RELOAD=true` only for deliberate local development hot reload.
