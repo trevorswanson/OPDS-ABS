@@ -429,7 +429,7 @@ async def opds_root_redirect(
     Returns:
         RedirectResponse: Redirect to the user's OPDS root.
     """
-    username, token, display_name = auth_info
+    username, _token, display_name = auth_info
 
     if not username:
         # Check if authentication was disabled or failed because server is unavailable
@@ -1167,10 +1167,12 @@ async def proxy_download(
             except aiohttp.ClientResponseError as e:
                 logger.error("Error proxying download: %s - %s", e.status, str(e))
                 # Re-raise as HTTPException with appropriate status
-                raise HTTPException(status_code=e.status, detail=f"Error fetching file: {str(e)}")
+                raise HTTPException(
+                    status_code=e.status, detail=f"Error fetching file: {str(e)}") from e
             except Exception as e:
                 logger.error("Unexpected error proxying download: %s", str(e))
-                raise HTTPException(status_code=500, detail=f"Error downloading file: {str(e)}")
+                raise HTTPException(
+                    status_code=500, detail=f"Error downloading file: {str(e)}") from e
 
     try:
         # Make a HEAD request first to get content headers without downloading the file
@@ -1215,4 +1217,5 @@ async def proxy_download(
 
     except Exception as e:
         logger.error("Error setting up download proxy: %s", str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to set up download: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to set up download: {str(e)}") from e

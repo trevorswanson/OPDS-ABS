@@ -215,7 +215,7 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             # Adjust page number if out of bounds
             if page < 1:
                 page = 1
-            elif page > total_pages and total_pages > 0:
+            elif 0 < total_pages < page:
                 page = total_pages
 
             if no_pagination:

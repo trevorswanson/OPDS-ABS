@@ -569,7 +569,8 @@ class CollectionFeedGenerator(BaseFeedGenerator):
         except Exception as e:
             logger.error("Error fetching collections: %s", e)
             if "not found" in str(e).lower():
-                raise ResourceNotFoundError(f"Collections not found for library {library_id}")
+                raise ResourceNotFoundError(
+                    f"Collections not found for library {library_id}") from e
             raise
 
     async def get_items_in_collection(self, username, library_id, collection_id, token=None):

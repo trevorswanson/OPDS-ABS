@@ -622,7 +622,7 @@ async def get_authenticated_user(
             raise HTTPException(
                 status_code=503,  # Service Unavailable
                 detail=error_message
-            )
+            ) from e
         # Regular authentication failure - return a 401 with WWW-Authenticate header
         raise HTTPException(
             status_code=401,
