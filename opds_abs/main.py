@@ -421,7 +421,7 @@ def index(request: Request):
         HTMLResponse: The rendered index.html template.
     """
     try:
-        return templates.TemplateResponse("index.html", {"request": request})
+        return templates.TemplateResponse(request, "index.html")
     except Exception as e:
         log_error(e, context="Rendering index page")
         raise convert_to_http_exception(e, status_code=500,
@@ -510,8 +510,7 @@ async def search_xml(
             effective_username = username
 
         params = dict(request.query_params)
-        return templates.TemplateResponse("search.xml", {
-            "request": request,
+        return templates.TemplateResponse(request, "search.xml", {
             "username": effective_username,
             "library_id": library_id,
             "searchTerms": params.get('q', ''),
