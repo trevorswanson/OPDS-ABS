@@ -268,6 +268,49 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             series_details = self._build_fallback_series_details(series_id, filtered_items)
             return filtered_items, series_details
 
+    def _get_series_display_info(self, series_details, library_items):
+        """Determine the series name and author name to show in the feed.
+
+        Args:
+            series_details (dict, optional): Series details, if found.
+            library_items (list): The series' library items, if any.
+
+        Returns:
+            tuple: (series_name, author_name)
+        """
+        series_name = "Unknown Series"
+        author_name = "Unknown Author"
+        if series_details:
+            series_name = series_details.get("name", "Unknown Series")
+
+        # Get the most common author if we have library items
+        if library_items:
+            author_name = self.get_most_common_author(library_items)
+        elif series_details:
+            # Fall back to series_details if we have it
+            author_name = series_details.get("authorName", "Unknown Author")
+
+        return series_name, author_name
+
+    async def _add_series_books_to_feed(self, feed, sorted_library_items, username, token):
+        """Fetch ebook files and add each series book to the feed.
+
+        Args:
+            feed: The XML feed object to add book entries to.
+            sorted_library_items (list): The series' books, sorted by sequence.
+            username (str): The username of the authenticated user.
+            token (str, optional): Authentication token for Audiobookshelf.
+        """
+        # Get ebook files for each book
+        tasks = [
+            get_download_urls_from_item(book.get("id", ""), username=username, token=token)
+            for book in sorted_library_items
+        ]
+
+        ebook_inos_list = await asyncio.gather(*tasks)
+        for book, ebook_inos in zip(sorted_library_items, ebook_inos_list):
+            self.add_book_to_feed(feed, book, ebook_inos, "", token)
+
     async def generate_series_items_feed(self, username, library_id, series_id, token=None):
         """Generate a feed of items in a specific series.
 
@@ -301,18 +344,8 @@ class SeriesFeedGenerator(BaseFeedGenerator):
                 token=token
             )
 
-            # Get details for series and author
-            series_name = "Unknown Series"
-            author_name = "Unknown Author"
-            if series_details:
-                series_name = series_details.get("name", "Unknown Series")
-
-            # Get the most common author if we have library items
-            if library_items:
-                author_name = self.get_most_common_author(library_items)
-            elif series_details:
-                # Fall back to series_details if we have it
-                author_name = series_details.get("authorName", "Unknown Author")
+            series_name, author_name = self._get_series_display_info(
+                series_details, library_items)
 
             # Create the feed
             feed = self.create_base_feed(username, library_id, token=token)
@@ -350,15 +383,7 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             logger.debug("Sorted %d items by sequence number for %s",
                          len(sorted_library_items), series_name)
 
-            # Get ebook files for each book
-            tasks = []
-            for book in sorted_library_items:
-                book_id = book.get("id", "")
-                tasks.append(get_download_urls_from_item(book_id, username=username, token=token))
-
-            ebook_inos_list = await asyncio.gather(*tasks)
-            for book, ebook_inos in zip(sorted_library_items, ebook_inos_list):
-                self.add_book_to_feed(feed, book, ebook_inos, "", token)
+            await self._add_series_books_to_feed(feed, sorted_library_items, username, token)
 
             return self.create_response(feed)
 
