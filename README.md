@@ -5,7 +5,7 @@
 This repository is a fork and continuation of [Petr Prikryl's original
 OPDS-ABS project](https://github.com/petr-prikryl/OPDS-ABS). His work provided
 the foundation for this project. Since the upstream repository had not been
-updated in roughly a year, Trevor Swanson is continuing development here.
+updated in roughly a year, I am continuing development here.
 
 This project provides an OPDS (Open Publication Distribution System) server that fetches books from the **Audiobookshelf API** and presents them in OPDS format, making it easy to browse and download books in supported OPDS clients.
 
