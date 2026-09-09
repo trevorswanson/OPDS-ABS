@@ -161,12 +161,18 @@ def handle_exception(
                 return handle_exception(e, context=context)
         ```
     """
-    # Determine the status code
+    # Determine the status code and a safe client-facing message
     if isinstance(exc, OPDSBaseException):
         code = exc.status_code
+        # These messages are authored by our own application code (e.g.
+        # ResourceNotFoundError("missing")), not derived from stack traces
+        # or internal details, so they're safe to pass through to clients.
         message = str(exc) or exc.default_message
     elif isinstance(exc, HTTPException):
         code = exc.status_code
+        # detail is set explicitly by our own route handlers (e.g.
+        # HTTPException(status_code=404, detail="Image not found")), not
+        # derived from stack traces or internal details, so it's safe here.
         message = exc.detail
     else:
         code = 500
