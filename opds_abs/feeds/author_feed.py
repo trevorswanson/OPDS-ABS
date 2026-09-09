@@ -497,4 +497,3 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             }
         }
         dict_to_xml(feed, error_data)
-
