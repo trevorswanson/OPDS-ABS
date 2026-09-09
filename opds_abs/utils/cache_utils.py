@@ -39,7 +39,8 @@ _last_save_time = 0
 _cache_lock = threading.RLock()
 
 
-def _create_cache_key(endpoint: str, params: Optional[Dict] = None, username: Optional[str] = None) -> str:
+def _create_cache_key(
+        endpoint: str, params: Optional[Dict] = None, username: Optional[str] = None) -> str:
     """Create a unique cache key from the endpoint and parameters.
 
     Args:
@@ -96,7 +97,10 @@ def load_cache_from_disk() -> None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
 
         if not cache_path.exists():
-            logger.info("Cache file does not exist at %s, starting with empty cache", CACHE_FILE_PATH)
+            logger.info(
+                "Cache file does not exist at %s, starting with empty cache",
+                CACHE_FILE_PATH,
+            )
             return
 
         with cache_path.open("rb") as f:
@@ -174,13 +178,15 @@ def save_cache_to_disk() -> None:
         logger.error("Failed to save cache to disk: %s", str(e))
 
 
-def cache_get(key: str, max_age: int = DEFAULT_CACHE_EXPIRY, ignore_expiry: bool = False) -> Optional[Any]:
+def cache_get(
+        key: str, max_age: int = DEFAULT_CACHE_EXPIRY,
+        ignore_expiry: bool = False) -> Optional[Any]:
     """Get an item from the cache if it exists and isn't expired.
 
     Args:
         key: Cache key
         max_age: Maximum age in seconds for cached item
-        ignore_expiry: If True, return the data even if expired (used for fallbacks when server is down)
+        ignore_expiry: If True, return expired data for server-down fallbacks.
 
     Returns:
         The cached data or None if not found or expired
@@ -277,7 +283,9 @@ def cached(expiry: int = DEFAULT_CACHE_EXPIRY) -> Callable:
     return decorator
 
 
-async def get_cached_library_items(fetch_from_api_func, filter_items_func, username, library_id, token=None, bypass_cache=False):
+async def get_cached_library_items(
+        fetch_from_api_func, filter_items_func, username, library_id,
+        token=None, bypass_cache=False):
     """Fetch and cache all library items that can be reused for filtering.
 
     This method fetches all library items and caches them so they can be
@@ -306,7 +314,12 @@ async def get_cached_library_items(fetch_from_api_func, filter_items_func, usern
     # Not in cache or bypassing cache, fetch the data
     logger.debug("Fetching all library items for library %s", library_id)
     items_params = {"limit": 10000, "expand": "media"}
-    data = await fetch_from_api_func(f"/libraries/{library_id}/items", items_params, username=username, token=token)
+    data = await fetch_from_api_func(
+        f"/libraries/{library_id}/items",
+        items_params,
+        username=username,
+        token=token,
+    )
     library_items = filter_items_func(data)
 
     # Store in cache for future use
@@ -315,7 +328,9 @@ async def get_cached_library_items(fetch_from_api_func, filter_items_func, usern
     return library_items
 
 
-async def get_cached_search_results(fetch_from_api_func, username, library_id, query, token=None, bypass_cache=False):
+async def get_cached_search_results(
+        fetch_from_api_func, username, library_id, query,
+        token=None, bypass_cache=False):
     """Fetch and cache search results to avoid repeated API calls.
 
     Args:
@@ -341,7 +356,12 @@ async def get_cached_search_results(fetch_from_api_func, username, library_id, q
     # Not in cache or bypassing cache, perform the search
     logger.debug("Performing search for query: %s", query)
     search_params = {"limit": 2000, "q": query}
-    search_data = await fetch_from_api_func(f"/libraries/{library_id}/search", search_params, username=username, token=token)
+    search_data = await fetch_from_api_func(
+        f"/libraries/{library_id}/search",
+        search_params,
+        username=username,
+        token=token,
+    )
 
     # Store in cache for future use
     cache_set(cache_key, search_data)
@@ -349,7 +369,8 @@ async def get_cached_search_results(fetch_from_api_func, username, library_id, q
     return search_data
 
 
-async def get_cached_series_details(fetch_from_api_func, username, library_id, series_id, token=None):
+async def get_cached_series_details(
+        fetch_from_api_func, username, library_id, series_id, token=None):
     """Fetch and cache detailed information about a specific series.
 
     This method caches series details to avoid redundant API calls when
@@ -380,7 +401,12 @@ async def get_cached_series_details(fetch_from_api_func, username, library_id, s
     # Get all series to find the one with the matching ID
     try:
         series_params = {"limit": 2000, "sort": "name"}
-        data = await fetch_from_api_func(f"/libraries/{library_id}/series", series_params, username=username, token=token)
+        data = await fetch_from_api_func(
+            f"/libraries/{library_id}/series",
+            series_params,
+            username=username,
+            token=token,
+        )
 
         # Find the series with the matching ID
         series_details = None
@@ -399,7 +425,9 @@ async def get_cached_series_details(fetch_from_api_func, username, library_id, s
         return None
 
 
-async def get_cached_author_details(fetch_func, filter_func, username, library_id, token=None, bypass_cache=False):
+async def get_cached_author_details(
+        fetch_func, filter_func, username, library_id,
+        token=None, bypass_cache=False):
     """Fetch and cache author information, focusing on authors who have books with ebook files.
 
     Args:
@@ -467,7 +495,12 @@ async def get_cached_author_details(fetch_func, filter_func, username, library_i
 
     # Now get full author details from the API
     authors_params = {"limit": 2000, "sort": "name"}
-    author_data = await fetch_func(f"/libraries/{library_id}/authors", authors_params, username=username, token=token)
+    author_data = await fetch_func(
+        f"/libraries/{library_id}/authors",
+        authors_params,
+        username=username,
+        token=token,
+    )
 
     if not author_data or "authors" not in author_data:
         logger.warning("Failed to retrieve full author details")
@@ -492,8 +525,10 @@ async def get_cached_author_details(fetch_func, filter_func, username, library_i
     return authors_list
 
 
-async def get_cached_series_items(fetch_from_api_func, filter_items_func, username, library_id, series_id, token=None, bypass_cache=False):
-    """Fetch and cache items for a specific series by directly querying the items endpoint with series filter.
+async def get_cached_series_items(
+        fetch_from_api_func, filter_items_func, username, library_id, series_id,
+        token=None, bypass_cache=False):
+    """Fetch and cache items by directly querying the filtered items endpoint.
 
     This ensures we get the proper sequence information for items in a series.
 
