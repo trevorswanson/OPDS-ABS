@@ -422,7 +422,8 @@ class BaseFeedGenerator:
             feed, "{http://a9.com/-/spec/opensearch/1.1/}totalResults")
         total_results_el.text = str(total_items)
 
-    def add_pagination_links(self, feed, current_path, page, items_per_page, total_items, token=None):
+    def add_pagination_links(
+            self, feed, current_path, page, items_per_page, total_items, token=None):
         """Add next/previous pagination links to the feed.
 
         Args:
@@ -455,7 +456,10 @@ class BaseFeedGenerator:
                         "rel": "next",
                         "title": "Next Page",
                         "type": "application/atom+xml;profile=opds-catalog",
-                        "href": f"/opds/{current_path}{separator}start_index={next_start_index}{auth_param}"
+                        "href": (
+                            f"/opds/{current_path}{separator}"
+                            f"start_index={next_start_index}{auth_param}"
+                        )
                     }
                 }
             }
@@ -475,7 +479,10 @@ class BaseFeedGenerator:
                         "rel": "previous",
                         "title": "Previous Page",
                         "type": "application/atom+xml;profile=opds-catalog",
-                        "href": f"/opds/{current_path}{separator}start_index={prev_start_index}{auth_param}"
+                        "href": (
+                            f"/opds/{current_path}{separator}"
+                            f"start_index={prev_start_index}{auth_param}"
+                        )
                     }
                 }
             }
