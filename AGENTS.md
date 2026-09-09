@@ -126,6 +126,8 @@ GitHub Actions workflows live in `.github/workflows/`:
 
 - `quality.yml` runs regression tests, Python compilation, pre-commit, Compose
   validation, and a Docker build on `dev`/`master` pushes and pull requests.
+  Its Flake8/Pylint job is advisory and uploads reports without blocking the
+  other quality gates.
 - `docstring-check.yml` runs documentation checks for Python changes.
 - `docker-image-dev.yml` builds and publishes the `dev` image as
   `ghcr.io/trevorswanson/opds-abs:dev-<short-sha>`.
