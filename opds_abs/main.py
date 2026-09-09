@@ -118,7 +118,9 @@ class ColorFormatter(logging.Formatter):
 
             # Apply color to level name only, not colon or spaces
             levelname_color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
-            record.levelprefix = f"{levelname_color}{record.levelname}{self.COLORS['RESET']}:{spaces}"
+            record.levelprefix = (
+                f"{levelname_color}{record.levelname}{self.COLORS['RESET']}:{spaces}"
+            )
         return super().format(record)
 
 
@@ -744,7 +746,9 @@ async def opds_series_items(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}/series/{series_id}")
+            return RedirectResponse(
+                url=f"/opds/{display_name}/libraries/{library_id}/series/{series_id}"
+            )
 
         # Use the display name from authentication if available
         effective_username = display_name if auth_username else username
@@ -759,7 +763,10 @@ async def opds_series_items(
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
-        context = f"Generating series items feed for user {username}, library {library_id}, series {series_id}"
+        context = (
+            f"Generating series items feed for user {username}, "
+            f"library {library_id}, series {series_id}"
+        )
         log_error(e, context=context)
         return handle_exception(e, context=context)
 
@@ -827,7 +834,12 @@ async def opds_collection_items(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}/collections/{collection_id}")
+            return RedirectResponse(
+                url=(
+                    f"/opds/{display_name}/libraries/{library_id}/"
+                    f"collections/{collection_id}"
+                )
+            )
 
         # Use the display name from authentication if available
         effective_username = display_name if auth_username else username
@@ -842,7 +854,10 @@ async def opds_collection_items(
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
-        context = f"Generating collection items feed for user {username}, library {library_id}, collection {collection_id}"
+        context = (
+            f"Generating collection items feed for user {username}, "
+            f"library {library_id}, collection {collection_id}"
+        )
         log_error(e, context=context)
         return handle_exception(e, context=context)
 
@@ -910,7 +925,9 @@ async def opds_author_items(
 
         # Ensure this is the authenticated user's feed or authentication is disabled
         if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}/authors/{author_id}")
+            return RedirectResponse(
+                url=f"/opds/{display_name}/libraries/{library_id}/authors/{author_id}"
+            )
 
         # Use the display name from authentication if available
         effective_username = display_name if auth_username else username
@@ -925,7 +942,10 @@ async def opds_author_items(
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
-        context = f"Generating author items feed for user {username}, library {library_id}, author {author_id}"
+        context = (
+            f"Generating author items feed for user {username}, "
+            f"library {library_id}, author {author_id}"
+        )
         log_error(e, context=context)
         return handle_exception(e, context=context)
 
@@ -1138,7 +1158,10 @@ async def proxy_download(
                 async with session.get(url, headers=headers) as response:
                     response.raise_for_status()
                     logger.debug(
-                        "Received successful response from Audiobookshelf API with status %s", response.status)
+                        "Received successful response from Audiobookshelf API "
+                        "with status %s",
+                        response.status,
+                    )
 
                     # Stream the response content
                     async for chunk in response.content.iter_any():
@@ -1166,15 +1189,19 @@ async def proxy_download(
 
                     # Set the same headers we received from Audiobookshelf
                     for header_name, header_value in head_response.headers.items():
-                        if header_name.lower() in ("content-type", "content-disposition", "content-length"):
+                        if header_name.lower() in (
+                                "content-type", "content-disposition", "content-length"):
                             response_headers[header_name] = header_value
 
                     logger.debug("Proxying download with content type: %s", content_type)
 
                     # Make sure we have a content-disposition header for proper filename
-                    if "content-disposition" not in {k.lower(): v for k, v in response_headers.items()}:
+                    if "content-disposition" not in {
+                            k.lower(): v for k, v in response_headers.items()}:
                         filename = f"book-{item_id}.epub"
-                        response_headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+                        response_headers["Content-Disposition"] = (
+                            f'attachment; filename="{filename}"'
+                        )
 
             except Exception as e:
                 logger.warning("Error making HEAD request, continuing without headers: %s", str(e))
