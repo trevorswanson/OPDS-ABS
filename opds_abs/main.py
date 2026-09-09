@@ -451,6 +451,10 @@ async def opds_root_redirect(
     target = f"/opds/{display_name}"
     target = target.replace("\\", "")
     if not urlparse(target).netloc and not urlparse(target).scheme:
+        # Confirmed false positive: target always starts with the hardcoded
+        # "/opds/" prefix above, so it can never become an absolute or
+        # protocol-relative redirect regardless of display_name's contents.
+        # codeql[py/url-redirection]
         return RedirectResponse(url=target)
     return RedirectResponse(url="/opds/anonymous")
 
@@ -481,6 +485,11 @@ async def search_xml(
             target = f"/opds/{display_name}/libraries/{library_id}/search.xml"
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             return RedirectResponse(
                 url=f"/opds/{username}/libraries/{library_id}/search.xml"
@@ -522,6 +531,11 @@ async def opds_root(
             target = f"/opds/{display_name}"
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             return RedirectResponse(url=f"/opds/{username}")
 
@@ -565,6 +579,11 @@ async def opds_nav(
             target = f"/opds/{display_name}/libraries/{library_id}"
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             return RedirectResponse(url=f"/opds/{username}/libraries/{library_id}")
 
@@ -615,6 +634,11 @@ async def opds_search(
                 target += f"?{params_str}"
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             fallback_url = f"/opds/{username}/libraries/{library_id}/search"
             if params_str:
@@ -677,6 +701,11 @@ async def opds_library(
                 target += f"?{params_str}"
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             fallback_url = f"/opds/{username}/libraries/{library_id}/items"
             if params_str:
@@ -731,6 +760,11 @@ async def opds_series(
             target = f"/opds/{display_name}/libraries/{library_id}/series"
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             return RedirectResponse(url=f"/opds/{username}/libraries/{library_id}/series")
 
@@ -786,6 +820,11 @@ async def opds_series_items(
             target = f"/opds/{display_name}/libraries/{library_id}/series/{series_id}"
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             return RedirectResponse(
                 url=f"/opds/{username}/libraries/{library_id}/series/{series_id}"
@@ -836,6 +875,11 @@ async def opds_collections(
             target = f"/opds/{display_name}/libraries/{library_id}/collections"
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             return RedirectResponse(
                 url=f"/opds/{username}/libraries/{library_id}/collections"
@@ -887,6 +931,11 @@ async def opds_collection_items(
             )
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             return RedirectResponse(
                 url=(
@@ -940,6 +989,11 @@ async def opds_authors(
             target = f"/opds/{display_name}/libraries/{library_id}/authors"
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             return RedirectResponse(
                 url=f"/opds/{username}/libraries/{library_id}/authors"
@@ -988,6 +1042,11 @@ async def opds_author_items(
             target = f"/opds/{display_name}/libraries/{library_id}/authors/{author_id}"
             target = target.replace("\\", "")
             if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # display_name's contents.
+                # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
             return RedirectResponse(
                 url=f"/opds/{username}/libraries/{library_id}/authors/{author_id}"
