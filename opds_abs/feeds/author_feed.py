@@ -205,7 +205,7 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                 # Use items per page from config if not specified
                 per_page = ITEMS_PER_PAGE if per_page is None else per_page
                 # If per_page is 0, we'll show all items without pagination
-                no_pagination = (per_page <= 0)
+                no_pagination = per_page <= 0
 
             # Apply pagination
             total_books = len(library_items)
@@ -524,7 +524,7 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                 # Adjust page number if out of bounds
                 if page < 1:
                     page = 1
-                elif page > total_pages and total_pages > 0:
+                elif 0 < total_pages < page:
                     page = total_pages
 
                 # Calculate start and end indices

@@ -147,8 +147,7 @@ class LibraryFeedGenerator(BaseFeedGenerator):
         # Extract pagination parameters
         try:
             start_index = int(params.get('start_index', 1))
-            if start_index < 1:
-                start_index = 1
+            start_index = max(start_index, 1)
         except (ValueError, TypeError):
             start_index = 1
 
@@ -161,7 +160,7 @@ class LibraryFeedGenerator(BaseFeedGenerator):
             # Use items per page from config
             items_per_page = ITEMS_PER_PAGE
             # If items_per_page is 0, we'll show all items without pagination
-            no_pagination = (items_per_page <= 0)
+            no_pagination = items_per_page <= 0
 
         # Current page calculation (1-based)
         page = 1 if no_pagination else ((start_index - 1) // items_per_page) + 1
@@ -169,7 +168,7 @@ class LibraryFeedGenerator(BaseFeedGenerator):
         # Build current path for pagination links
         path_params = []
         for key, value in params.items():
-            if key != 'start_index' and key != 'token':
+            if key not in ('start_index', 'token'):
                 path_params.append(f"{key}={value}")
 
         # Properly construct the path with &
