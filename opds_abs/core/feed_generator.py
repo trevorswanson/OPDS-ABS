@@ -1,17 +1,24 @@
 """Base class for generating OPDS feeds."""
 # Standard library imports
+import asyncio
+import logging
 from base64 import b64encode
 from copy import deepcopy
 from datetime import datetime
+from typing import Optional
 
 # Third-party imports
 from lxml import etree
 from fastapi.responses import Response
 
 # Local application imports
-from opds_abs.config import AUDIOBOOKSHELF_API
+from opds_abs.api.client import get_download_urls_from_item
+from opds_abs.config import ITEMS_PER_PAGE, PAGINATION_ENABLED
 from opds_abs.utils import dict_to_xml
 from opds_abs.utils.error_utils import FeedGenerationError, log_error
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Mapping of ebook formats to correct MIME types for OPDS
 FORMAT_TO_MIMETYPE = {
@@ -30,6 +37,7 @@ FORMAT_TO_MIMETYPE = {
     "cbt":  "application/x-cbt",
     "cb7":  "application/x-cb7",
 }
+
 
 class BaseFeedGenerator:
     """Base class for creating OPDS feed components.
@@ -91,6 +99,7 @@ class BaseFeedGenerator:
             username (str, optional): Username for personalized feed. Defaults to None.
             library_id (str, optional): Library ID to associate with the feed. Defaults to None.
             current_path (str, optional): Current path for pagination links. Defaults to None.
+            token (str, optional): Authentication token for the start link. Defaults to None.
 
         Returns:
             Element: An lxml Element object representing the base feed structure.
@@ -181,6 +190,28 @@ class BaseFeedGenerator:
             log_error(e, context="Creating XML response")
             raise FeedGenerationError("Failed to generate XML response") from e
 
+    @staticmethod
+    def _extract_book_context(book):
+        """Extract the metadata fields add_book_to_feed() needs from a book dict.
+
+        Args:
+            book (dict): Dictionary containing book data from Audiobookshelf API.
+
+        Returns:
+            dict: book, book_id, book_title, book_author, book_metadata, ebook_format.
+        """
+        media = book.get("media", {})
+        book_metadata = media.get("metadata", {})
+        return {
+            "book": book,
+            "book_id": book.get("id", ""),
+            "book_title": book_metadata.get("title", "Unknown Title"),
+            "book_author": book_metadata.get("authorName", "Unknown Author"),
+            "book_metadata": book_metadata,
+            "ebook_format": media.get(
+                "ebookFormat", media.get("ebookFile", {}).get("ebookFormat")),
+        }
+
     def add_book_to_feed(self, feed, book, ebook_inos, query_filter="", token=None):
         """Add a book to the feed with all its metadata.
 
@@ -198,15 +229,10 @@ class BaseFeedGenerator:
         Raises:
             FeedGenerationError: If there's an error adding the book to the feed.
         """
-        import logging
-        logger = logging.getLogger(__name__)
-
         try:
-            book_id = book.get("id", "")
-            media = book.get("media", {})
-            book_metadata = media.get("metadata", {})
-            book_title = book_metadata.get("title", "Unknown Title")
-            book_author = book_metadata.get("authorName", "Unknown Author")
+            book_ctx = self._extract_book_context(book)
+            book_id = book_ctx["book_id"]
+            book_title = book_ctx["book_title"]
 
             # Check if the token was provided in the method call
             # If not, try to get it from the ebook_inos object
@@ -218,96 +244,162 @@ class BaseFeedGenerator:
                     logger.debug("Using token from ebook file for book '%s'", book_title)
 
             # Log detailed information about the book and token
-            logger.debug("Adding book to feed: '%s' (ID: %s), token present: %s", book_title, book_id, effective_token is not None)
-
-            # Extract ebook format - check both direct and nested paths (for search results)
-            ebook_format = media.get("ebookFormat", media.get("ebookFile", {}).get("ebookFormat"))
-            logger.debug("Book '%s' format: %s", book_title, ebook_format)
+            logger.debug("Adding book to feed: '%s' (ID: %s), token present: %s",
+                         book_title, book_id, effective_token is not None)
+            logger.debug("Book '%s' format: %s", book_title, book_ctx["ebook_format"])
 
             for ebook in ebook_inos:
-                # Use external URL for client-facing download links
-                from opds_abs.config import AUDIOBOOKSHELF_EXTERNAL_URL
-                book_path = f"{AUDIOBOOKSHELF_EXTERNAL_URL}/api/items/{book_id}"
-                file_ino = ebook.get('ino')
-
-                # Use our proxy endpoint instead of direct Audiobookshelf API link
-                # No need to append token as query parameter since our proxy handles authentication
-                download_path = f"/opds/proxy/download/{book_id}/file/{file_ino}"
-                logger.debug("Generated proxied download URL for '%s': %s", book_title, download_path)
-
-                # Cover URL doesn't need authentication
-                cover_url = f"{book_path}/cover?format=jpeg"
-                series_list = book_metadata.get("seriesName", None)
-                added_at = datetime.fromtimestamp(book.get('addedAt')/1000).strftime('%Y-%m-%d')
-
-                # Create the description content with HTML formatting
-                content_text = (
-                    f"{book_metadata.get('description', '')}<br/><br/>"
-                    f"{'Series: ' + series_list + '<br/>' if series_list else ''}"
-                    f"Published year: {book_metadata.get('publishedYear')}<br/>"
-                    f"Genres: {', '.join(book_metadata.get('genres', []))}<br/>"
-                    f"Added at: {added_at}<br/>"
-                )
-
-                # Set the correct MIME type based on the format
-                # Default to epub if the format is unknown
-                format_lower = ebook_format.lower() if ebook_format else "epub"
-                mime_type = FORMAT_TO_MIMETYPE.get(format_lower, "application/epub+zip")
-
-                # Build the entry data structure
-                entry_data = {
-                    "entry": {
-                        "title": {"_text": book_title},
-                        "id": {"_text": book_id},
-                        "updated": {"_text": self.get_current_timestamp()},
-                        "content": {
-                            "_attrs": {"type": "xhtml"},
-                            "_text": content_text
-                        },
-                        "author": {
-                            "name": {"_text": book_author}
-                        },
-                        "link": [
-                            {
-                                "_attrs": {
-                                    "href": download_path,
-                                    "rel": "http://opds-spec.org/acquisition",
-                                    "type": mime_type,
-                                    "title": f"{book_author} - {book_title}"
-                                }
-                            },
-                            {
-                                "_attrs": {
-                                    "href": cover_url,
-                                    "rel": "http://opds-spec.org/image",
-                                    "type": "image/jpeg"
-                                }
-                            }
-                        ]
-                    }
-                }
-
-                # Add series info if filtering by series
-                if query_filter.startswith("series"):
-                    series_number = book_metadata.get('series', {}).get("sequence", "")
-                    series_name = book_metadata.get('series', {}).get("name", "")
-                    entry_data["entry"]["series"] = {
-                        "name": {"_text": f" - {series_name} #{series_number}"}
-                    }
-
-                # Convert the dictionary to XML elements
-                dict_to_xml(feed, entry_data)
+                self._add_book_download_entry(feed, book_ctx, ebook, query_filter)
 
         except (ValueError, KeyError) as e:
-            book_title = book.get("media", {}).get("metadata", {}).get("title", "Unknown")
-            context = f"Adding book '{book_title}' to feed"
-            log_error(e, context=context)
-            raise FeedGenerationError(f"Failed to add book to feed: {str(e)}") from e
+            self._handle_add_book_error(e, book, "Failed to add book to feed: {}")
         except Exception as e:
-            book_title = book.get("media", {}).get("metadata", {}).get("title", "Unknown")
-            context = f"Adding book '{book_title}' to feed"
-            log_error(e, context=context)
-            raise FeedGenerationError(f"Unexpected error adding book to feed: {str(e)}") from e
+            self._handle_add_book_error(e, book, "Unexpected error adding book to feed: {}")
+
+    @staticmethod
+    def _handle_add_book_error(e, book, message_template):
+        """Log and re-raise an error from add_book_to_feed() as a FeedGenerationError.
+
+        Args:
+            e (Exception): The original exception.
+            book (dict): The book dict being processed when the error occurred.
+            message_template (str): A template with one "{}" for str(e), used
+                for the raised FeedGenerationError's message.
+
+        Raises:
+            FeedGenerationError: Always, wrapping the original exception.
+        """
+        book_title = book.get("media", {}).get("metadata", {}).get("title", "Unknown")
+        context = f"Adding book '{book_title}' to feed"
+        log_error(e, context=context)
+        raise FeedGenerationError(message_template.format(str(e))) from e
+
+    @staticmethod
+    def _build_book_content_text(book_metadata, series_list, added_at):
+        """Build the HTML-formatted description text for a book entry.
+
+        Args:
+            book_metadata (dict): The book's media.metadata dict.
+            series_list (str, optional): The book's series name, if any.
+            added_at (str): The formatted date the book was added.
+
+        Returns:
+            str: The HTML content text for the entry.
+        """
+        return (
+            f"{book_metadata.get('description', '')}<br/><br/>"
+            f"{'Series: ' + series_list + '<br/>' if series_list else ''}"
+            f"Published year: {book_metadata.get('publishedYear')}<br/>"
+            f"Genres: {', '.join(book_metadata.get('genres', []))}<br/>"
+            f"Added at: {added_at}<br/>"
+        )
+
+    @staticmethod
+    def _resolve_ebook_mime_type(ebook_format):
+        """Resolve the MIME type to advertise for a given ebook format.
+
+        Args:
+            ebook_format (str, optional): The ebook file format (e.g. "epub").
+
+        Returns:
+            str: The MIME type, defaulting to epub's when the format is unknown.
+        """
+        format_lower = ebook_format.lower() if ebook_format else "epub"
+        return FORMAT_TO_MIMETYPE.get(format_lower, "application/epub+zip")
+
+    def _build_book_entry_data(self, book_ctx, link_info):
+        """Build the OPDS entry dict for one book download-file link.
+
+        Args:
+            book_ctx (dict): book_id, book_title, book_author - see add_book_to_feed().
+            link_info (dict): content_text, download_path, mime_type, cover_url.
+
+        Returns:
+            dict: The entry data structure ready for dict_to_xml().
+        """
+        book_id = book_ctx["book_id"]
+        book_title = book_ctx["book_title"]
+        book_author = book_ctx["book_author"]
+
+        return {
+            "entry": {
+                "title": {"_text": book_title},
+                "id": {"_text": book_id},
+                "updated": {"_text": self.get_current_timestamp()},
+                "content": {
+                    "_attrs": {"type": "xhtml"},
+                    "_text": link_info["content_text"]
+                },
+                "author": {
+                    "name": {"_text": book_author}
+                },
+                "link": [
+                    {
+                        "_attrs": {
+                            "href": link_info["download_path"],
+                            "rel": "http://opds-spec.org/acquisition",
+                            "type": link_info["mime_type"],
+                            "title": f"{book_author} - {book_title}"
+                        }
+                    },
+                    {
+                        "_attrs": {
+                            "href": link_info["cover_url"],
+                            "rel": "http://opds-spec.org/image",
+                            "type": "image/jpeg"
+                        }
+                    }
+                ]
+            }
+        }
+
+    def _add_book_download_entry(self, feed, book_ctx, ebook, query_filter):
+        """Build and add one download-file entry for a book to the feed.
+
+        Args:
+            feed (Element): The lxml Element to add the entry to.
+            book_ctx (dict): book, book_id, book_title, book_author,
+                book_metadata, ebook_format - see add_book_to_feed().
+            ebook (dict): One entry from ebook_inos, with an 'ino' key.
+            query_filter (str): Filter string; entries add series info when it
+                starts with "series".
+        """
+        book_metadata = book_ctx["book_metadata"]
+
+        file_ino = ebook.get('ino')
+
+        # Use our proxy endpoint instead of direct Audiobookshelf API link
+        # No need to append token as query parameter since our proxy handles authentication
+        download_path = f"/opds/proxy/download/{book_ctx['book_id']}/file/{file_ino}"
+        logger.debug("Generated proxied download URL for '%s': %s",
+                     book_ctx["book_title"], download_path)
+
+        # Proxy covers through OPDS-ABS so clients do not need ABS credentials.
+        cover_url = f"/opds/proxy/cover/{book_ctx['book_id']}"
+        series_list = book_metadata.get("seriesName", None)
+        added_at = datetime.fromtimestamp(
+            book_ctx["book"].get('addedAt') / 1000).strftime('%Y-%m-%d')
+
+        link_info = {
+            "content_text": self._build_book_content_text(book_metadata, series_list, added_at),
+            "download_path": download_path,
+            "mime_type": self._resolve_ebook_mime_type(book_ctx["ebook_format"]),
+            "cover_url": cover_url,
+        }
+
+        # Build the entry data structure
+        entry_data = self._build_book_entry_data(book_ctx, link_info)
+
+        # Add series info if filtering by series
+        if query_filter.startswith("series"):
+            series_number = book_metadata.get('series', {}).get("sequence", "")
+            series_name = book_metadata.get('series', {}).get("name", "")
+            entry_data["entry"]["series"] = {
+                "name": {"_text": f" - {series_name} #{series_number}"}
+            }
+
+        # Convert the dictionary to XML elements
+        dict_to_xml(feed, entry_data)
 
     def create_filter(self, abs_filter=None):
         """Create a base64-encoded filter to be used by Audiobookshelf.
@@ -346,7 +438,7 @@ class BaseFeedGenerator:
             for result in data.get("results", []):
                 media = result.get("media", {})
                 if "ebookFormat" in media and media.get("ebookFormat", None):
-                    result.update({"opds_seq":n})
+                    result.update({"opds_seq": n})
                     n += 1
                     filtered_results.append(result)
 
@@ -412,16 +504,48 @@ class BaseFeedGenerator:
         start_index = (page - 1) * items_per_page + 1  # OpenSearch is 1-indexed
 
         # Add opensearch elements
-        items_per_page_el = etree.SubElement(feed, "{http://a9.com/-/spec/opensearch/1.1/}itemsPerPage")
+        items_per_page_el = etree.SubElement(
+            feed, "{http://a9.com/-/spec/opensearch/1.1/}itemsPerPage")
         items_per_page_el.text = str(items_per_page)
 
         start_index_el = etree.SubElement(feed, "{http://a9.com/-/spec/opensearch/1.1/}startIndex")
         start_index_el.text = str(start_index)
 
-        total_results_el = etree.SubElement(feed, "{http://a9.com/-/spec/opensearch/1.1/}totalResults")
+        total_results_el = etree.SubElement(
+            feed, "{http://a9.com/-/spec/opensearch/1.1/}totalResults")
         total_results_el.text = str(total_items)
 
-    def add_pagination_links(self, feed, current_path, page, items_per_page, total_items, token=None):
+    @staticmethod
+    def _build_pagination_link(link_ctx, rel, title, start_index):
+        """Build one OPDS pagination link entry (next or previous).
+
+        Args:
+            link_ctx (dict): current_path, has_params, auth_param - shared
+                context for both pagination links (see add_pagination_links()).
+            rel (str): The link relation ("next" or "previous").
+            title (str): The link's title.
+            start_index (int): The start_index query value for this link.
+
+        Returns:
+            dict: The link data structure ready for dict_to_xml().
+        """
+        separator = "&" if link_ctx["has_params"] else "?"
+        return {
+            "link": {
+                "_attrs": {
+                    "rel": rel,
+                    "title": title,
+                    "type": "application/atom+xml;profile=opds-catalog",
+                    "href": (
+                        f"/opds/{link_ctx['current_path']}{separator}"
+                        f"start_index={start_index}{link_ctx['auth_param']}"
+                    )
+                }
+            }
+        }
+
+    def add_pagination_links(
+            self, feed, current_path, page, items_per_page, total_items, token=None):
         """Add next/previous pagination links to the feed.
 
         Args:
@@ -434,50 +558,25 @@ class BaseFeedGenerator:
         """
         total_pages = (total_items + items_per_page - 1) // items_per_page  # Ceiling division
 
-        # Base URL parameters
-        auth_param = f"&token={token}" if token else ""
-
-        # Check if current_path already has parameters
-        has_params = "?" in current_path
+        link_ctx = {
+            "current_path": current_path,
+            # Check if current_path already has parameters
+            "has_params": "?" in current_path,
+            "auth_param": f"&token={token}" if token else "",
+        }
 
         # Add next page link if there are more pages
         if page < total_pages:
-            next_page = page + 1
-            next_start_index = (next_page - 1) * items_per_page + 1
-
-            # Use correct separator based on existing parameters
-            separator = "&" if has_params else "?"
-
-            next_link = {
-                "link": {
-                    "_attrs": {
-                        "rel": "next",
-                        "title": "Next Page",
-                        "type": "application/atom+xml;profile=opds-catalog",
-                        "href": f"/opds/{current_path}{separator}start_index={next_start_index}{auth_param}"
-                    }
-                }
-            }
+            next_start_index = page * items_per_page + 1
+            next_link = self._build_pagination_link(
+                link_ctx, "next", "Next Page", next_start_index)
             dict_to_xml(feed, next_link)
 
         # Add previous page link if not on first page
         if page > 1:
-            prev_page = page - 1
-            prev_start_index = (prev_page - 1) * items_per_page + 1
-
-            # Use correct separator based on existing parameters
-            separator = "&" if has_params else "?"
-
-            prev_link = {
-                "link": {
-                    "_attrs": {
-                        "rel": "previous",
-                        "title": "Previous Page",
-                        "type": "application/atom+xml;profile=opds-catalog",
-                        "href": f"/opds/{current_path}{separator}start_index={prev_start_index}{auth_param}"
-                    }
-                }
-            }
+            prev_start_index = (page - 2) * items_per_page + 1
+            prev_link = self._build_pagination_link(
+                link_ctx, "previous", "Previous Page", prev_start_index)
             dict_to_xml(feed, prev_link)
 
     def paginate_results(self, items, start_index, items_per_page):
@@ -508,6 +607,130 @@ class BaseFeedGenerator:
         end_idx = start_idx + items_per_page
 
         return items[start_idx:end_idx]
+
+    @staticmethod
+    def paginate_page_items(items, page, per_page):
+        """Compute the paginated page of items to render (page-number based).
+
+        Used by feeds that expose first/previous/next/last page links (as
+        opposed to add_pagination_links()'s OpenSearch start_index style).
+
+        Args:
+            items (list): All items to paginate, already filtered/sorted.
+            page (int): The requested page number (1-indexed).
+            per_page (int, optional): Requested items per page; None uses config default.
+
+        Returns:
+            tuple: (paged_items, page, total_pages, no_pagination)
+        """
+        if not PAGINATION_ENABLED:
+            # Pagination is disabled, show all items
+            per_page = 0
+            no_pagination = True
+        else:
+            # Use items per page from config if not specified
+            per_page = ITEMS_PER_PAGE if per_page is None else per_page
+            # If per_page is 0, we'll show all items without pagination
+            no_pagination = per_page <= 0
+
+        total_items = len(items)
+        total_pages = 1 if no_pagination else (
+            total_items + per_page - 1) // per_page  # Ceiling division
+
+        # Adjust page number if out of bounds
+        if page < 1:
+            page = 1
+        elif 0 < total_pages < page:
+            page = total_pages
+
+        if no_pagination:
+            paged_items = items
+        else:
+            start_idx = (page - 1) * per_page
+            end_idx = min(start_idx + per_page, total_items)
+            paged_items = items[start_idx:end_idx]
+
+        return paged_items, page, total_pages, no_pagination
+
+    def add_page_pagination_links(
+            self, feed, base_url: str, current_page: int, total_pages: int,
+            token: Optional[str] = None):
+        """Add first/previous/next/last page-number pagination links to the feed.
+
+        Args:
+            feed: The XML feed object to add links to.
+            base_url (str): The feed's URL, without a "?page=" query string.
+            current_page (int): Current page number (1-based).
+            total_pages (int): Total number of pages.
+            token (str, optional): Token to include in the link URLs.
+        """
+        token_param = f"&token={token}" if token else ""
+        links = []
+
+        if current_page > 1:
+            links.append({
+                "_attrs": {
+                    "rel": "first",
+                    "href": f"{base_url}?page=1{token_param}",
+                    "type": "application/atom+xml;profile=opds-catalog"
+                }
+            })
+            links.append({
+                "_attrs": {
+                    "rel": "previous",
+                    "href": f"{base_url}?page={current_page-1}{token_param}",
+                    "type": "application/atom+xml;profile=opds-catalog"
+                }
+            })
+
+        if current_page < total_pages:
+            links.append({
+                "_attrs": {
+                    "rel": "next",
+                    "href": f"{base_url}?page={current_page+1}{token_param}",
+                    "type": "application/atom+xml;profile=opds-catalog"
+                }
+            })
+            links.append({
+                "_attrs": {
+                    "rel": "last",
+                    "href": f"{base_url}?page={total_pages}{token_param}",
+                    "type": "application/atom+xml;profile=opds-catalog"
+                }
+            })
+
+        for link in links:
+            dict_to_xml(feed, {"link": link})
+
+    async def add_paged_books_to_feed(self, feed, paged_items, username, token):
+        """Fetch ebook files in batches and add each paged book to the feed.
+
+        Args:
+            feed: The XML feed object to add book entries to.
+            paged_items (list): The page of books to add.
+            username (str): The username of the authenticated user.
+            token (str, optional): Authentication token for Audiobookshelf.
+        """
+        # Get ebook files in optimal batch sizes to avoid overwhelming the server
+        batch_size = 5  # Adjust based on server capacity
+        tasks = []
+
+        for book in paged_items:
+            book_id = book.get("id", "")
+            if book_id:
+                tasks.append(get_download_urls_from_item(
+                    book_id, username=username, token=token))
+
+        # Process in batches if we have a lot of books
+        for i in range(0, len(tasks), batch_size):
+            batch_tasks = tasks[i:i+batch_size]
+            batch_results = await asyncio.gather(*batch_tasks)
+
+            # Add each book from this batch to the feed
+            for j, ebook_info in enumerate(batch_results):
+                book_index = i + j
+                if book_index < len(paged_items):
+                    self.add_book_to_feed(feed, paged_items[book_index], ebook_info, "", token)
 
     def get_current_timestamp(self):
         """Get the current timestamp in ISO 8601 format.

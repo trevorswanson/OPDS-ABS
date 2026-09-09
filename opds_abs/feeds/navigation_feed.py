@@ -5,11 +5,12 @@ import logging
 # Local application imports
 from opds_abs.core.feed_generator import BaseFeedGenerator
 from opds_abs.core.navigation import navigation
-from opds_abs.config import ITEMS_PER_PAGE, PAGINATION_ENABLED
+
 from opds_abs.utils import dict_to_xml
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
 
 class NavigationFeedGenerator(BaseFeedGenerator):
     """Generator for navigation feed.
@@ -98,7 +99,7 @@ class NavigationFeedGenerator(BaseFeedGenerator):
                 "title": {"_text": f"Navigation for {username}'s library"},
                 "author": {
                     "name": {"_text": "OPDS Audiobookshelf"},
-                    "uri": {"_text": "https://github.com/petr-prikryl/OPDS-ABS"}
+                    "uri": {"_text": "https://github.com/trevorswanson/OPDS-ABS"},
                 },
                 "link": [
                     {
@@ -118,17 +119,17 @@ class NavigationFeedGenerator(BaseFeedGenerator):
             for nav in navigation:
                 # Set up navigation item paths and URLs
                 base_path = f"/opds/{username}/libraries/{library_id}/"
-                nav_params = nav.get('params','')
+                nav_params = nav.get('params', '')
 
                 # Add authentication token to nav_params if available
                 if token and nav_params:
-                    nav_href = f"{base_path}{nav.get('path','')}?{nav_params}&token={token}"
+                    nav_href = f"{base_path}{nav.get('path', '')}?{nav_params}&token={token}"
                 elif token:
-                    nav_href = f"{base_path}{nav.get('path','')}?token={token}"
+                    nav_href = f"{base_path}{nav.get('path', '')}?token={token}"
                 elif nav_params:
-                    nav_href = f"{base_path}{nav.get('path','')}?{nav_params}"
+                    nav_href = f"{base_path}{nav.get('path', '')}?{nav_params}"
                 else:
-                    nav_href = f"{base_path}{nav.get('path','')}"
+                    nav_href = f"{base_path}{nav.get('path', '')}"
 
                 # Create entry data structure
                 entry_data = {

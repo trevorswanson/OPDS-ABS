@@ -1,6 +1,11 @@
 # OPDS Server for Audiobookshelf
 
-[![Docstring Check](https://github.com/petr-prikryl/OPDS-ABS/actions/workflows/docstring-check.yml/badge.svg)](https://github.com/petr-prikryl/OPDS-ABS/actions/workflows/docstring-check.yml)
+[![Docstring Check](https://github.com/trevorswanson/OPDS-ABS/actions/workflows/docstring-check.yml/badge.svg)](https://github.com/trevorswanson/OPDS-ABS/actions/workflows/docstring-check.yml)
+
+This repository is a fork and continuation of [Petr Prikryl's original
+OPDS-ABS project](https://github.com/petr-prikryl/OPDS-ABS). His work provided
+the foundation for this project. Since the upstream repository had not been
+updated in roughly a year, I am continuing development here.
 
 This project provides an OPDS (Open Publication Distribution System) server that fetches books from the **Audiobookshelf API** and presents them in OPDS format, making it easy to browse and download books in supported OPDS clients.
 
@@ -81,7 +86,7 @@ If you need to switch between different authentication methods, you can use the 
 ### 1️⃣ **Clone the repository**
 
 ```bash
-git clone https://github.com/petr-prikryl/opds-abs.git
+git clone https://github.com/trevorswanson/OPDS-ABS.git
 cd opds-abs
 ```
 
@@ -128,6 +133,8 @@ services:
 
       # Performance settings
       - OPDS_LOG_LEVEL=INFO
+      # Development only; leave false in Docker to avoid filesystem polling
+      - OPDS_RELOAD=false
       - ITEMS_PER_PAGE=25  # Set to 0 to disable pagination
 ```
 
@@ -146,12 +153,14 @@ services:
 | `PGID` | Group ID for file ownership | `1000` |
 | `ITEMS_PER_PAGE` | Number of items per page, 0 to disable pagination | `25` |
 | `OPDS_LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | `INFO` |
+| `OPDS_RELOAD` | Enable Uvicorn hot reload; intended for local development | `false` |
 | `CACHE_PERSISTENCE_ENABLED` | Enable/disable cache persistence | `true` |
 
 ## 🐳 Running from GitHub Container Registry (GHCR)
 
-You can use the pre-built Docker image:
-
+You can use the pre-built Docker image. `latest` tracks the newest tagged
+release; pin a specific version (e.g. `v0.5.0`, `0.5`, or `0`) if you want to
+control upgrades yourself.
 
 ```bash
 docker run -d -p 8000:8000 \
@@ -160,7 +169,7 @@ docker run -d -p 8000:8000 \
   --env PUID=$(id -u) \
   --env PGID=$(id -g) \
   --volume ./data:/app/opds_abs/data \
-  ghcr.io/petr-prikryl/opds-abs:latest
+  ghcr.io/trevorswanson/opds-abs:latest
 ```
 
 # Legacy support
@@ -169,7 +178,7 @@ docker run -d -p 8000:8000 \
 Or use `docker-compose.yml` directly:
 
 ```bash
-curl -o docker-compose.yml https://raw.githubusercontent.com/petr-prikryl/OPDS-ABS/refs/heads/master/docker-compose.yml
+curl -o docker-compose.yml https://raw.githubusercontent.com/trevorswanson/OPDS-ABS/refs/heads/master/docker-compose.yml
 docker-compose up -d
 ```
 

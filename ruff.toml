@@ -1,0 +1,39 @@
+# Ruff configuration.
+#
+# Replaces flake8 + flake8-docstrings + pydocstyle's CI role (see
+# `setup.cfg`'s now-removed `[flake8]` section). Mirrors the same line
+# length, exclusions, and Google-style docstring convention.
+
+line-length = 100
+
+extend-exclude = [
+    "build",
+    "dist",
+    "venv",
+]
+
+[lint]
+# E/W: pycodestyle, F: pyflakes, D: pydocstyle (flake8-docstrings equivalent).
+select = ["E", "F", "W", "D"]
+ignore = [
+    "E203",  # whitespace before ':' - conflicts with black-style slicing
+    "E226",  # missing whitespace around arithmetic operator - pycodestyle default-ignore
+    "E241",  # multiple spaces after comma - pycodestyle default-ignore
+    "E242",  # tab after comma - pycodestyle default-ignore
+]
+
+# Several pycodestyle E3xx (blank-lines) checks are still preview-only in
+# Ruff's stable rule set. flake8 enforced them, so enable preview to keep
+# parity - the ignores above restore flake8's own default-ignore list
+# (E121/E123/E126/E704/W503/W504 aren't implemented by Ruff at all, so
+# there's nothing to re-ignore for those).
+preview = true
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.per-file-ignores]
+# Don't require docstrings in __init__.py files.
+"*/__init__.py" = ["D104"]
+# Don't require docstrings in tests.
+"tests/*" = ["D100", "D101", "D102", "D103"]

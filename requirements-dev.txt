@@ -1,6 +1,7 @@
 -r requirements.txt
 pylint
 pydocstyle
-flake8
-flake8-docstrings
+ruff
 pre-commit
+coverage
+httpx2

@@ -24,7 +24,13 @@ def dict_to_xml(parent_element, data: Dict[str, Any]) -> None:
                 "name": {"_text": "Author Name"}
             },
             "link": [
-                {"_attrs": {"href": "/path1", "rel": "subsection", "type": "application/atom+xml;profile=opds-catalog"}},
+                {
+                    "_attrs": {
+                        "href": "/path1",
+                        "rel": "subsection",
+                        "type": "application/atom+xml;profile=opds-catalog",
+                    }
+                },
                 {"_attrs": {"href": "/path2", "rel": "image", "type": "image/jpeg"}}
             ]
         }
@@ -36,9 +42,9 @@ def dict_to_xml(parent_element, data: Dict[str, Any]) -> None:
     """
     for key, value in data.items():
         if isinstance(value, dict):
-            # Extract attributes and text if present
-            attrs = value.pop("_attrs", {})
-            text = value.pop("_text", None)
+            # Read attributes and text without mutating caller-owned data.
+            attrs = value.get("_attrs", {})
+            text = value.get("_text")
 
             # Create the element with attributes
             element = etree.SubElement(parent_element, key, **attrs)
@@ -47,8 +53,13 @@ def dict_to_xml(parent_element, data: Dict[str, Any]) -> None:
             if text is not None:
                 element.text = str(text)
 
-            # Process child elements recursively
-            dict_to_xml(element, value)
+            # Process child elements recursively, excluding metadata keys.
+            children = {
+                child_key: child_value
+                for child_key, child_value in value.items()
+                if child_key not in ("_attrs", "_text")
+            }
+            dict_to_xml(element, children)
 
         elif isinstance(value, list):
             # Handle lists of elements with the same tag name

@@ -8,15 +8,14 @@ persistence using pickle.
 # Standard library imports
 import time
 import logging
-import os
+
 import pickle
 import threading
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Callable
 import functools
-import hashlib
 import json
-import asyncio
+
 import base64
 
 # Local application imports
@@ -25,7 +24,7 @@ from opds_abs.config import (
     LIBRARY_ITEMS_CACHE_EXPIRY,
     SEARCH_RESULTS_CACHE_EXPIRY,
     SERIES_DETAILS_CACHE_EXPIRY,
-    SERIES_ITEMS_CACHE_EXPIRY,  # Add this new constant
+    SERIES_ITEMS_CACHE_EXPIRY,
     CACHE_PERSISTENCE_ENABLED,
     CACHE_FILE_PATH,
     CACHE_SAVE_INTERVAL,
@@ -36,11 +35,13 @@ logger = logging.getLogger(__name__)
 
 # Cache dictionary: key -> (timestamp, data)
 _cache: Dict[str, Tuple[float, Any]] = {}
-_last_save_time = 0
+# Mutable container so save_cache_to_disk() can update the timestamp without `global`.
+_save_state = {"last_save_time": 0.0}
 _cache_lock = threading.RLock()
 
 
-def _create_cache_key(endpoint: str, params: Optional[Dict] = None, username: Optional[str] = None) -> str:
+def _create_cache_key(
+        endpoint: str, params: Optional[Dict] = None, username: Optional[str] = None) -> str:
     """Create a unique cache key from the endpoint and parameters.
 
     Args:
@@ -59,9 +60,25 @@ def _create_cache_key(endpoint: str, params: Optional[Dict] = None, username: Op
     if username:
         components.append(username)
 
-    # Create a hash of the components
+    # Encode the components as a stable cache identifier. This is not a
+    # security boundary and must not be mistaken for credential hashing.
     key_str = "".join(components)
-    return hashlib.md5(key_str.encode()).hexdigest()
+    return base64.urlsafe_b64encode(key_str.encode()).decode().rstrip("=")
+
+
+def has_ebook(media: Dict[str, Any]) -> bool:
+    """Check whether a book's media dict indicates it has an ebook.
+
+    Args:
+        media: A book's "media" dict from the Audiobookshelf API.
+
+    Returns:
+        bool: True if the media has an ebookFile or a truthy ebookFormat.
+    """
+    return (
+        media.get("ebookFile") is not None or
+        (media.get("ebookFormat") is not None and media.get("ebookFormat"))
+    )
 
 
 def load_cache_from_disk() -> None:
@@ -83,8 +100,6 @@ def load_cache_from_disk() -> None:
         IOError: If there is an error reading the cache file.
         EOFError: If the cache file is empty or corrupted.
     """
-    global _cache
-
     if not CACHE_PERSISTENCE_ENABLED:
         logger.debug("Cache persistence is disabled, skipping load from disk")
         return
@@ -96,13 +111,17 @@ def load_cache_from_disk() -> None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
 
         if not cache_path.exists():
-            logger.info("Cache file does not exist at %s, starting with empty cache", CACHE_FILE_PATH)
+            logger.info(
+                "Cache file does not exist at %s, starting with empty cache",
+                CACHE_FILE_PATH,
+            )
             return
 
         with cache_path.open("rb") as f:
             with _cache_lock:
                 loaded_cache = pickle.load(f)
-                _cache = loaded_cache
+                _cache.clear()
+                _cache.update(loaded_cache)
 
         # Count non-expired items
         current_time = time.time()
@@ -114,7 +133,7 @@ def load_cache_from_disk() -> None:
     except (pickle.PickleError, IOError, EOFError) as e:
         logger.warning("Failed to load cache from disk: %s", str(e))
         # Start with an empty cache if loading fails
-        _cache = {}
+        _cache.clear()
 
 
 def save_cache_to_disk() -> None:
@@ -132,8 +151,6 @@ def save_cache_to_disk() -> None:
         pickle.PickleError: If there is an error pickling the cache data.
         IOError: If there is an error writing to the cache file.
     """
-    global _last_save_time
-
     if not CACHE_PERSISTENCE_ENABLED:
         return
 
@@ -142,7 +159,7 @@ def save_cache_to_disk() -> None:
     # Use a lock to prevent concurrent access during save
     with _cache_lock:
         # Only save if enough time has passed since last save
-        if current_time - _last_save_time < CACHE_SAVE_INTERVAL:
+        if current_time - _save_state["last_save_time"] < CACHE_SAVE_INTERVAL:
             return
 
         # Clean expired items before saving
@@ -155,7 +172,7 @@ def save_cache_to_disk() -> None:
             del _cache[key]
 
         # Update last save time
-        _last_save_time = current_time
+        _save_state["last_save_time"] = current_time
 
     try:
         cache_path = Path(CACHE_FILE_PATH)
@@ -174,13 +191,15 @@ def save_cache_to_disk() -> None:
         logger.error("Failed to save cache to disk: %s", str(e))
 
 
-def cache_get(key: str, max_age: int = DEFAULT_CACHE_EXPIRY, ignore_expiry: bool = False) -> Optional[Any]:
+def cache_get(
+        key: str, max_age: int = DEFAULT_CACHE_EXPIRY,
+        ignore_expiry: bool = False) -> Optional[Any]:
     """Get an item from the cache if it exists and isn't expired.
 
     Args:
         key: Cache key
         max_age: Maximum age in seconds for cached item
-        ignore_expiry: If True, return the data even if expired (used for fallbacks when server is down)
+        ignore_expiry: If True, return expired data for server-down fallbacks.
 
     Returns:
         The cached data or None if not found or expired
@@ -209,9 +228,19 @@ def cache_set(key: str, data: Any) -> None:
         _cache[key] = (time.time(), data)
 
     # Schedule background save if enough time has passed
-    if CACHE_PERSISTENCE_ENABLED and time.time() - _last_save_time >= CACHE_SAVE_INTERVAL:
+    time_since_save = time.time() - _save_state["last_save_time"]
+    if CACHE_PERSISTENCE_ENABLED and time_since_save >= CACHE_SAVE_INTERVAL:
         # Use a thread to save the cache without blocking
         threading.Thread(target=save_cache_to_disk, daemon=True).start()
+
+
+def get_cache() -> Dict[str, Tuple[float, Any]]:
+    """Return the in-memory cache dictionary instance.
+
+    Returns:
+        Dict[str, Tuple[float, Any]]: The cache mapping keys to (timestamp, data).
+    """
+    return _cache
 
 
 def clear_cache() -> int:
@@ -255,7 +284,9 @@ def cached(expiry: int = DEFAULT_CACHE_EXPIRY) -> Callable:
             args_str = json.dumps([str(a) for a in args], sort_keys=True) if args else "[]"
             kwargs_str = json.dumps(kwargs, sort_keys=True) if kwargs else "{}"
 
-            cache_key = hashlib.md5(f"{func_name}:{args_str}:{kwargs_str}".encode()).hexdigest()
+            cache_key = base64.urlsafe_b64encode(
+                f"{func_name}:{args_str}:{kwargs_str}".encode()
+            ).decode().rstrip("=")
 
             # Try to get from cache
             cached_data = cache_get(cache_key, expiry)
@@ -275,7 +306,9 @@ def cached(expiry: int = DEFAULT_CACHE_EXPIRY) -> Callable:
     return decorator
 
 
-async def get_cached_library_items(fetch_from_api_func, filter_items_func, username, library_id, token=None, bypass_cache=False):
+async def get_cached_library_items(
+        fetch_from_api_func, filter_items_func, username, library_id,
+        token=None, bypass_cache=False):
     """Fetch and cache all library items that can be reused for filtering.
 
     This method fetches all library items and caches them so they can be
@@ -304,7 +337,12 @@ async def get_cached_library_items(fetch_from_api_func, filter_items_func, usern
     # Not in cache or bypassing cache, fetch the data
     logger.debug("Fetching all library items for library %s", library_id)
     items_params = {"limit": 10000, "expand": "media"}
-    data = await fetch_from_api_func(f"/libraries/{library_id}/items", items_params, username=username, token=token)
+    data = await fetch_from_api_func(
+        f"/libraries/{library_id}/items",
+        items_params,
+        username=username,
+        token=token,
+    )
     library_items = filter_items_func(data)
 
     # Store in cache for future use
@@ -313,7 +351,9 @@ async def get_cached_library_items(fetch_from_api_func, filter_items_func, usern
     return library_items
 
 
-async def get_cached_search_results(fetch_from_api_func, username, library_id, query, token=None, bypass_cache=False):
+async def get_cached_search_results(
+        fetch_from_api_func, username, library_id, query,
+        token=None, bypass_cache=False):
     """Fetch and cache search results to avoid repeated API calls.
 
     Args:
@@ -339,7 +379,12 @@ async def get_cached_search_results(fetch_from_api_func, username, library_id, q
     # Not in cache or bypassing cache, perform the search
     logger.debug("Performing search for query: %s", query)
     search_params = {"limit": 2000, "q": query}
-    search_data = await fetch_from_api_func(f"/libraries/{library_id}/search", search_params, username=username, token=token)
+    search_data = await fetch_from_api_func(
+        f"/libraries/{library_id}/search",
+        search_params,
+        username=username,
+        token=token,
+    )
 
     # Store in cache for future use
     cache_set(cache_key, search_data)
@@ -347,7 +392,8 @@ async def get_cached_search_results(fetch_from_api_func, username, library_id, q
     return search_data
 
 
-async def get_cached_series_details(fetch_from_api_func, username, library_id, series_id, token=None):
+async def get_cached_series_details(
+        fetch_from_api_func, username, library_id, series_id, token=None):
     """Fetch and cache detailed information about a specific series.
 
     This method caches series details to avoid redundant API calls when
@@ -378,7 +424,12 @@ async def get_cached_series_details(fetch_from_api_func, username, library_id, s
     # Get all series to find the one with the matching ID
     try:
         series_params = {"limit": 2000, "sort": "name"}
-        data = await fetch_from_api_func(f"/libraries/{library_id}/series", series_params, username=username, token=token)
+        data = await fetch_from_api_func(
+            f"/libraries/{library_id}/series",
+            series_params,
+            username=username,
+            token=token,
+        )
 
         # Find the series with the matching ID
         series_details = None
@@ -397,7 +448,81 @@ async def get_cached_series_details(fetch_from_api_func, username, library_id, s
         return None
 
 
-async def get_cached_author_details(fetch_func, filter_func, username, library_id, token=None, bypass_cache=False):
+def _count_authors_with_ebooks(library_items):
+    """Build a name -> ebook count map from library items that have an ebook.
+
+    Args:
+        library_items (list): Library items to scan.
+
+    Returns:
+        dict: Author name -> {"name", "ebook_count", "id": None, "imagePath": None}.
+    """
+    authors_with_ebooks = {}
+
+    # Optimize ebook detection with a single pass through the items
+    for item in library_items:
+        media = item.get("media", {})
+        metadata = media.get("metadata", {})
+
+        if has_ebook(media):
+            # Get author name from metadata
+            author_name = metadata.get("authorName")
+            if author_name:
+                # Add or update author in our tracking dictionary
+                if author_name in authors_with_ebooks:
+                    authors_with_ebooks[author_name]["ebook_count"] += 1
+                else:
+                    authors_with_ebooks[author_name] = {
+                        "name": author_name,
+                        "ebook_count": 1,
+                        "id": None,  # Will be populated from author details
+                        "imagePath": None  # Will be populated from author details
+                    }
+
+    return authors_with_ebooks
+
+
+async def _enhance_authors_with_details(
+        fetch_func, library_id, username, token, authors_with_ebooks):
+    """Fill in id/imagePath for known authors using the full authors API.
+
+    Args:
+        fetch_func (callable): The function to fetch data from the API.
+        library_id (str): ID of the library to search in.
+        username (str): The username of the authenticated user.
+        token (str, optional): Authentication token for Audiobookshelf.
+        authors_with_ebooks (dict): Author name -> partial author info; updated in place.
+
+    Returns:
+        bool: True if author details were successfully retrieved and applied,
+            False if the API call failed to return usable data.
+    """
+    authors_params = {"limit": 2000, "sort": "name"}
+    author_data = await fetch_func(
+        f"/libraries/{library_id}/authors",
+        authors_params,
+        username=username,
+        token=token,
+    )
+
+    if not author_data or "authors" not in author_data:
+        logger.warning("Failed to retrieve full author details")
+        return False
+
+    # Enhance author information with details from the author endpoint
+    for author in author_data.get("authors", []):
+        author_name = author.get("name")
+        if author_name and author_name in authors_with_ebooks:
+            # Add ID and image path from author details
+            authors_with_ebooks[author_name]["id"] = author.get("id")
+            authors_with_ebooks[author_name]["imagePath"] = author.get("imagePath")
+
+    return True
+
+
+async def get_cached_author_details(
+        fetch_func, filter_func, username, library_id,
+        token=None, bypass_cache=False):
     """Fetch and cache author information, focusing on authors who have books with ebook files.
 
     Args:
@@ -435,50 +560,15 @@ async def get_cached_author_details(fetch_func, filter_func, username, library_i
         return []
 
     # First collect basic author info from items
-    authors_with_ebooks = {}
-
-    # Optimize ebook detection with a single pass through the items
-    for item in library_items:
-        media = item.get("media", {})
-        metadata = media.get("metadata", {})
-
-        # Efficient ebook detection
-        has_ebook = (
-            media.get("ebookFile") is not None or
-            (media.get("ebookFormat") is not None and media.get("ebookFormat"))
-        )
-
-        if has_ebook:
-            # Get author name from metadata
-            author_name = metadata.get("authorName")
-            if author_name:
-                # Add or update author in our tracking dictionary
-                if author_name in authors_with_ebooks:
-                    authors_with_ebooks[author_name]["ebook_count"] += 1
-                else:
-                    authors_with_ebooks[author_name] = {
-                        "name": author_name,
-                        "ebook_count": 1,
-                        "id": None,  # Will be populated from author details
-                        "imagePath": None  # Will be populated from author details
-                    }
+    authors_with_ebooks = _count_authors_with_ebooks(library_items)
 
     # Now get full author details from the API
-    authors_params = {"limit": 2000, "sort": "name"}
-    author_data = await fetch_func(f"/libraries/{library_id}/authors", authors_params, username=username, token=token)
+    details_ok = await _enhance_authors_with_details(
+        fetch_func, library_id, username, token, authors_with_ebooks)
 
-    if not author_data or "authors" not in author_data:
-        logger.warning("Failed to retrieve full author details")
+    if not details_ok:
         # Just return what we have so far
         return list(authors_with_ebooks.values())
-
-    # Enhance author information with details from the author endpoint
-    for author in author_data.get("authors", []):
-        author_name = author.get("name")
-        if author_name and author_name in authors_with_ebooks:
-            # Add ID and image path from author details
-            authors_with_ebooks[author_name]["id"] = author.get("id")
-            authors_with_ebooks[author_name]["imagePath"] = author.get("imagePath")
 
     # Convert to list for the caller
     authors_list = list(authors_with_ebooks.values())
@@ -490,8 +580,10 @@ async def get_cached_author_details(fetch_func, filter_func, username, library_i
     return authors_list
 
 
-async def get_cached_series_items(fetch_from_api_func, filter_items_func, username, library_id, series_id, token=None, bypass_cache=False):
-    """Fetch and cache items for a specific series by directly querying the items endpoint with series filter.
+async def get_cached_series_items(
+        fetch_from_api_func, filter_items_func, username, library_id, series_id,
+        token=None, bypass_cache=False):
+    """Fetch and cache items by directly querying the filtered items endpoint.
 
     This ensures we get the proper sequence information for items in a series.
 

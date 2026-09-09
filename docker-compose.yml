@@ -18,6 +18,7 @@ services:
       - AUTH_ENABLED=true
       - API_KEY_AUTH_ENABLED=true
       - OPDS_LOG_LEVEL=INFO
+      - OPDS_RELOAD=false
       - CACHE_PERSISTENCE_ENABLED=true
       - PAGINATION_ENABLED=true
       - ITEMS_PER_PAGE=25  # Set to 0 to show all items but keep pagination links

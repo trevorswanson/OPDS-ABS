@@ -46,11 +46,20 @@ import logging
 import time
 import atexit
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 
 
 # Third-party imports
+import aiohttp
+from markupsafe import escape
 from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.exception_handlers import http_exception_handler
@@ -68,9 +77,18 @@ from opds_abs.feeds.series_feed import SeriesFeedGenerator
 from opds_abs.feeds.collection_feed import CollectionFeedGenerator
 from opds_abs.feeds.author_feed import AuthorFeedGenerator
 from opds_abs.feeds.search_feed import SearchFeedGenerator
-from opds_abs.utils.cache_utils import _cache, clear_cache, load_cache_from_disk, save_cache_to_disk
+from opds_abs.utils.cache_utils import (
+    clear_cache,
+    get_cache,
+    load_cache_from_disk,
+    save_cache_to_disk,
+)
 from opds_abs.api.client import invalidate_cache
-from opds_abs.utils.auth_utils import get_authenticated_user, require_auth
+from opds_abs.utils.auth_utils import (
+    get_authenticated_user,
+    require_auth,
+    resolve_effective_username,
+)
 from opds_abs.utils.error_utils import (
     OPDSBaseException,
     ResourceNotFoundError,
@@ -83,6 +101,8 @@ from opds_abs.utils.error_utils import (
 )
 
 # Define custom formatter to match uvicorn's style exactly
+
+
 class ColorFormatter(logging.Formatter):
     """Custom log formatter that adds ANSI color codes to log levels.
 
@@ -94,9 +114,9 @@ class ColorFormatter(logging.Formatter):
     COLORS = {
         "DEBUG": "\033[36m",  # Cyan
         "INFO": "\033[32m",   # Green
-        "WARNING": "\033[33m", # Yellow
+        "WARNING": "\033[33m",  # Yellow
         "ERROR": "\033[31m",   # Red
-        "CRITICAL": "\033[1;31m", # Bold Red
+        "CRITICAL": "\033[1;31m",  # Bold Red
         "RESET": "\033[0m"     # Reset
     }
 
@@ -116,8 +136,11 @@ class ColorFormatter(logging.Formatter):
 
             # Apply color to level name only, not colon or spaces
             levelname_color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
-            record.levelprefix = f"{levelname_color}{record.levelname}{self.COLORS['RESET']}:{spaces}"
+            record.levelprefix = (
+                f"{levelname_color}{record.levelname}{self.COLORS['RESET']}:{spaces}"
+            )
         return super().format(record)
+
 
 # Set up logging for the entire application
 logging.basicConfig(
@@ -154,37 +177,44 @@ author_feed = AuthorFeedGenerator()
 search_feed = SearchFeedGenerator()
 
 # Create startup and shutdown sequences for loading cache
+
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     """Load the cache from disk on application startup and log configuration."""
     # Log configuration settings
     logger.info("Starting OPDS-ABS with configuration:")
-    logger.info(f"Audiobookshelf URL: {AUDIOBOOKSHELF_INTERNAL_URL}")
-    logger.info(f"Audiobookshelf Internal URL: {AUDIOBOOKSHELF_INTERNAL_URL}")
-    logger.info(f"Audiobookshelf External URL: {AUDIOBOOKSHELF_EXTERNAL_URL}")
-    logger.info(f"Authentication Enabled: {AUTH_ENABLED}")
-    logger.info(f"API Key Authentication Enabled: {API_KEY_AUTH_ENABLED}")
+    logger.info("Audiobookshelf URL: %s", AUDIOBOOKSHELF_INTERNAL_URL)
+    logger.info("Audiobookshelf Internal URL: %s", AUDIOBOOKSHELF_INTERNAL_URL)
+    logger.info("Audiobookshelf External URL: %s", AUDIOBOOKSHELF_EXTERNAL_URL)
+    logger.info("Authentication Enabled: %s", AUTH_ENABLED)
+    if API_KEY_AUTH_ENABLED:
+        logger.info("API key authentication is enabled")
+    else:
+        logger.info("API key authentication is disabled")
     if not API_KEY_AUTH_ENABLED:
         logger.warning("API Key Authentication is DISABLED. Only username/password will work.")
-    logger.info(f"Auth Token Caching: {AUTH_TOKEN_CACHING}")
-    logger.info(f"Cache Persistence Enabled: {CACHE_PERSISTENCE_ENABLED}")
+    logger.info("Auth Token Caching: %s", AUTH_TOKEN_CACHING)
+    logger.info("Cache Persistence Enabled: %s", CACHE_PERSISTENCE_ENABLED)
 
     # Log pagination settings
     if PAGINATION_ENABLED:
-        logger.info(f"Pagination: {PAGINATION_ENABLED} (Items per page: {ITEMS_PER_PAGE})")
+        logger.info("Pagination: %s (Items per page: %s)", PAGINATION_ENABLED, ITEMS_PER_PAGE)
     else:
-        logger.info(f"Pagination: {PAGINATION_ENABLED} (Disabled - all items will be shown in feeds)")
+        logger.info(
+            "Pagination: %s (Disabled - all items will be shown in feeds)", PAGINATION_ENABLED)
 
-    logger.info(f"Log Level: {LOG_LEVEL}")
+    logger.info("Log Level: %s", LOG_LEVEL)
 
     if CACHE_PERSISTENCE_ENABLED:
         logger.info("Loading cache from disk...")
         load_cache_from_disk()
     yield
-    """Save the cache to disk on application shutdown."""
+    # Save the cache to disk on application shutdown.
     if CACHE_PERSISTENCE_ENABLED:
         logger.info("Saving cache to disk...")
         save_cache_to_disk()
+
 
 # Create FastAPI app
 app = FastAPI(
@@ -205,6 +235,8 @@ if CACHE_PERSISTENCE_ENABLED:
     atexit.register(save_cache_to_disk)
 
 # Custom exception handler for OPDS exceptions
+
+
 @app.exception_handler(OPDSBaseException)
 async def opds_exception_handler(request: Request, exc: OPDSBaseException):
     """Handle custom OPDS exceptions using our error handling utilities.
@@ -219,7 +251,50 @@ async def opds_exception_handler(request: Request, exc: OPDSBaseException):
     context = f"{request.method} {request.url.path}"
     return handle_exception(exc, context=context)
 
+
+def _extract_username_library_from_path(path: str) -> tuple:
+    """Pull the username and library_id path segments out of an OPDS route.
+
+    Args:
+        path (str): The request URL path, e.g. "/opds/alice/libraries/lib1/items".
+
+    Returns:
+        tuple: (username, library_id), either of which may be None if absent.
+    """
+    path_parts = path.split('/')
+    username = None
+    library_id = None
+
+    for i, part in enumerate(path_parts):
+        if part == "opds" and i+1 < len(path_parts):
+            username = path_parts[i+1]
+        if part == "libraries" and i+1 < len(path_parts):
+            library_id = path_parts[i+1]
+
+    return username, library_id
+
+
+def _build_opds_error_xml(error_id, message, context) -> str:
+    """Build an OPDS-compliant XML error document.
+
+    Args:
+        error_id: Identifier for the error (typically id(exc)).
+        message: Human-readable error message.
+        context: Description of what the application was doing.
+
+    Returns:
+        str: The OPDS-compliant XML error document.
+    """
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<error xmlns="http://opds-spec.org/2010/catalog">
+  <id>{error_id}</id>
+  <message>{message}</message>
+  <context>{context}</context>
+</error>"""
+
 # Custom exception handler for API connectivity errors
+
+
 @app.exception_handler(APIClientError)
 async def api_client_error_handler(request: Request, exc: APIClientError):
     """Handle API connectivity errors gracefully with OPDS-compliant XML error format.
@@ -242,37 +317,21 @@ async def api_client_error_handler(request: Request, exc: APIClientError):
     # Get the context from the request path
     context = f"{request.method} {request.url.path}"
 
-    # Extract the username and library_id from the request path if possible
-    path_parts = request.url.path.split('/')
-    username = None
-    library_id = None
-
-    for i, part in enumerate(path_parts):
-        if part == "opds" and i+1 < len(path_parts):
-            username = path_parts[i+1]
-        if part == "libraries" and i+1 < len(path_parts):
-            library_id = path_parts[i+1]
-
     # Create a more specific context if we have the username and library_id
+    username, library_id = _extract_username_library_from_path(request.url.path)
     if username and library_id:
         context = f"Generating items feed for user {username}, library {library_id}"
 
-    # Create OPDS-compliant XML error response
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<error xmlns="http://opds-spec.org/2010/catalog">
-  <id>{error_id}</id>
-  <message>{str(exc)}</message>
-  <context>{context}</context>
-</error>"""
-
     # Return the XML response with proper content type
     return Response(
-        content=xml_content,
+        content=_build_opds_error_xml(error_id, str(exc), context),
         media_type="application/xml",
         status_code=503  # Service Unavailable
     )
 
 # Custom exception handler for authentication errors
+
+
 @app.exception_handler(AuthenticationError)
 async def authentication_error_handler(request: Request, exc: AuthenticationError):
     """Handle authentication errors with OPDS-compliant XML error format.
@@ -291,40 +350,24 @@ async def authentication_error_handler(request: Request, exc: AuthenticationErro
     # Get the context from the request path
     context = f"{request.method} {request.url.path}"
 
-    # Extract the username and library_id from the request path if possible
-    path_parts = request.url.path.split('/')
-    username = None
-    library_id = None
-
-    for i, part in enumerate(path_parts):
-        if part == "opds" and i+1 < len(path_parts):
-            username = path_parts[i+1]
-        if part == "libraries" and i+1 < len(path_parts):
-            library_id = path_parts[i+1]
-
     # Create a more specific context if we have the username and library_id
+    username, library_id = _extract_username_library_from_path(request.url.path)
     if username and library_id:
         context = f"Authentication for user {username}, library {library_id}"
     elif username:
         context = f"Authentication for user {username}"
 
-    # Create OPDS-compliant XML error response
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<error xmlns="http://opds-spec.org/2010/catalog">
-  <id>{error_id}</id>
-  <message>{str(exc)}</message>
-  <context>{context}</context>
-</error>"""
-
     # Return the XML response with proper content type and WWW-Authenticate header
     return Response(
-        content=xml_content,
+        content=_build_opds_error_xml(error_id, str(exc), context),
         media_type="application/xml",
         status_code=401,
         headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
     )
 
 # Custom exception handler for 503 Service Unavailable errors
+
+
 @app.exception_handler(503)
 async def service_unavailable_handler(request: Request, exc: HTTPException):
     """Handle Service Unavailable errors with OPDS-compliant XML format.
@@ -344,22 +387,17 @@ async def service_unavailable_handler(request: Request, exc: HTTPException):
     # Get the context from the request path
     context = f"{request.method} {request.url.path}"
 
-    # Create OPDS-compliant XML error response
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<error xmlns="http://opds-spec.org/2010/catalog">
-  <id>{error_id}</id>
-  <message>Audiobookshelf server is unavailable: {exc.detail}</message>
-  <context>{context}</context>
-</error>"""
-
     # Return the XML response with proper content type
     return Response(
-        content=xml_content,
+        content=_build_opds_error_xml(
+            error_id, f"Audiobookshelf server is unavailable: {exc.detail}", context),
         media_type="application/xml",
         status_code=503  # Service Unavailable
     )
 
 # Fall back to standard HTTPException handling for other exceptions
+
+
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
     """Custom handler for HTTPExceptions that logs them before handling.
@@ -375,6 +413,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     log_error(exc, context=context, log_traceback=False)
     return await http_exception_handler(request, exc)
 
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     """Render the index page.
@@ -386,16 +425,16 @@ def index(request: Request):
         HTMLResponse: The rendered index.html template.
     """
     try:
-        return templates.TemplateResponse("index.html", {"request": request})
+        return templates.TemplateResponse(request, "index.html")
     except Exception as e:
         log_error(e, context="Rendering index page")
         raise convert_to_http_exception(e, status_code=500,
-            detail="Failed to render index page") from e
+                                        detail="Failed to render index page") from e
 
 
 @app.get("/opds", response_class=RedirectResponse)
 async def opds_root_redirect(
-    request: Request,
+    _request: Request,
     auth_info: tuple = Depends(get_authenticated_user)
 ):
     """Redirect to the authenticated user's OPDS root.
@@ -407,23 +446,33 @@ async def opds_root_redirect(
     Returns:
         RedirectResponse: Redirect to the user's OPDS root.
     """
-    username, token, display_name = auth_info
+    username, _token, display_name = auth_info
 
     if not username:
         # Check if authentication was disabled or failed because server is unavailable
         if not AUTH_ENABLED:
             # Authentication is disabled, so use a default username
-            return RedirectResponse(url=f"/opds/anonymous")
-        else:
-            # If not authenticated, return a 401 with WWW-Authenticate header
-            raise HTTPException(
-                status_code=401,
-                detail="Authentication required",
-                headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
-            )
+            return RedirectResponse(url="/opds/anonymous")
+        # If not authenticated, return a 401 with WWW-Authenticate header
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
+        )
 
-    # Redirect to the user's OPDS root
-    return RedirectResponse(url=f"/opds/{display_name}")
+    # Redirect to the user's OPDS root. display_name comes from the
+    # Audiobookshelf server's authentication response rather than FastAPI's
+    # path routing, so validate it the way CodeQL's py/url-redirection query
+    # recommends before using it to build a redirect target.
+    target = f"/opds/{display_name}"
+    target = target.replace("\\", "")
+    if not urlparse(target).netloc and not urlparse(target).scheme:
+        # Confirmed false positive: target always starts with the hardcoded
+        # "/opds/" prefix above, so it can never become an absolute or
+        # protocol-relative redirect regardless of display_name's contents.
+        # codeql[py/url-redirection]
+        return RedirectResponse(url=target)
+    return RedirectResponse(url="/opds/anonymous")
 
 
 @app.get("/opds/{username}/libraries/{library_id}/search.xml", response_class=HTMLResponse)
@@ -448,21 +497,27 @@ async def search_xml(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}/search.xml")
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/search.xml")
+        if redirect is not None:
+            return redirect
 
         params = dict(request.query_params)
-        return templates.TemplateResponse("search.xml", {
-            "request": request,
-            "username": display_name if auth_username else username,
-            "library_id": library_id,
-            "searchTerms": params.get('q', ''),
-            "token": token  # Add token to the template context
+        # Explicitly escape values reflected into the template. Jinja2Templates
+        # already autoescapes "search.xml" via its default select_autoescape(),
+        # but escaping here as well removes any ambiguity for user-controlled
+        # input (searchTerms, token) reaching the response.
+        return templates.TemplateResponse(request, "search.xml", {
+            "username": escape(effective_username),
+            "library_id": escape(library_id),
+            "searchTerms": escape(params.get('q', '')),
+            "token": escape(token) if token else token
         })
     except Exception as e:
         log_error(e, context=f"Rendering search XML for user {username}, library {library_id}")
         raise convert_to_http_exception(e, status_code=500,
-            detail="Failed to render search template") from e
+                                        detail="Failed to render search template") from e
 
 
 @app.get("/opds/{username}")
@@ -483,17 +538,16 @@ async def opds_root(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name, "")
+        if redirect is not None:
+            return redirect
 
         return await library_feed.generate_root_feed(
             effective_username,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -522,18 +576,17 @@ async def opds_nav(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name, f"/libraries/{library_id}")
+        if redirect is not None:
+            return redirect
 
         return await navigation_feed.generate_navigation_feed(
             effective_username,
             library_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -564,16 +617,12 @@ async def opds_search(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            # Preserve search parameters in the redirect
-            params_str = "&".join([f"{k}={v}" for k, v in request.query_params.items()])
-            redirect_url = f"/opds/{display_name}/libraries/{library_id}/search"
-            if params_str:
-                redirect_url += f"?{params_str}"
-            return RedirectResponse(url=redirect_url)
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/search",
+            query_params=dict(request.query_params))
+        if redirect is not None:
+            return redirect
 
         params = dict(request.query_params)
         return await search_feed.generate_search_feed(
@@ -582,7 +631,7 @@ async def opds_search(
             params,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -620,16 +669,12 @@ async def opds_library(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            # Preserve query parameters in the redirect
-            params_str = "&".join([f"{k}={v}" for k, v in request.query_params.items()])
-            redirect_url = f"/opds/{display_name}/libraries/{library_id}/items"
-            if params_str:
-                redirect_url += f"?{params_str}"
-            return RedirectResponse(url=redirect_url)
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/items",
+            query_params=dict(request.query_params))
+        if redirect is not None:
+            return redirect
 
         params = dict(request.query_params)
 
@@ -643,7 +688,7 @@ async def opds_library(
             params,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -672,18 +717,17 @@ async def opds_series(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}/series")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name, f"/libraries/{library_id}/series")
+        if redirect is not None:
+            return redirect
 
         return await series_feed.generate_series_feed(
             effective_username,
             library_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -723,11 +767,11 @@ async def opds_series_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}/series/{series_id}")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/series/{series_id}")
+        if redirect is not None:
+            return redirect
 
         return await series_feed.generate_series_items_feed(
             effective_username,
@@ -735,11 +779,14 @@ async def opds_series_items(
             series_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
-        context = f"Generating series items feed for user {username}, library {library_id}, series {series_id}"
+        context = (
+            f"Generating series items feed for user {username}, "
+            f"library {library_id}, series {series_id}"
+        )
         log_error(e, context=context)
         return handle_exception(e, context=context)
 
@@ -764,18 +811,17 @@ async def opds_collections(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}/collections")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name, f"/libraries/{library_id}/collections")
+        if redirect is not None:
+            return redirect
 
         return await collection_feed.generate_collections_feed(
             effective_username,
             library_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -806,11 +852,11 @@ async def opds_collection_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}/collections/{collection_id}")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/collections/{collection_id}")
+        if redirect is not None:
+            return redirect
 
         return await collection_feed.generate_collection_items_feed(
             effective_username,
@@ -818,11 +864,14 @@ async def opds_collection_items(
             collection_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
-        context = f"Generating collection items feed for user {username}, library {library_id}, collection {collection_id}"
+        context = (
+            f"Generating collection items feed for user {username}, "
+            f"library {library_id}, collection {collection_id}"
+        )
         log_error(e, context=context)
         return handle_exception(e, context=context)
 
@@ -847,18 +896,17 @@ async def opds_authors(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}/authors")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name, f"/libraries/{library_id}/authors")
+        if redirect is not None:
+            return redirect
 
         return await author_feed.generate_authors_feed(
             effective_username,
             library_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
@@ -889,11 +937,11 @@ async def opds_author_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        if AUTH_ENABLED and auth_username and username != display_name:
-            return RedirectResponse(url=f"/opds/{display_name}/libraries/{library_id}/authors/{author_id}")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/authors/{author_id}")
+        if redirect is not None:
+            return redirect
 
         return await author_feed.generate_author_items_feed(
             effective_username,
@@ -901,17 +949,20 @@ async def opds_author_items(
             author_id,
             token=token
         )
-    except ResourceNotFoundError as e:
+    except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator
         raise
     except Exception as e:
-        context = f"Generating author items feed for user {username}, library {library_id}, author {author_id}"
+        context = (
+            f"Generating author items feed for user {username}, "
+            f"library {library_id}, author {author_id}"
+        )
         log_error(e, context=context)
         return handle_exception(e, context=context)
 
 
 @app.get("/admin/cache/stats")
-async def get_cache_stats(auth_info: tuple = Depends(require_auth)):
+async def get_cache_stats(_auth_info: tuple = Depends(require_auth)):
     """Get statistics about the cache.
 
     Returns:
@@ -919,8 +970,7 @@ async def get_cache_stats(auth_info: tuple = Depends(require_auth)):
                       age information, and estimated size.
     """
     try:
-        # Import here to ensure we're using the same _cache instance
-        from opds_abs.utils.cache_utils import _cache as current_cache
+        current_cache = get_cache()
 
         now = time.time()
         stats = {
@@ -942,18 +992,19 @@ async def get_cache_stats(auth_info: tuple = Depends(require_auth)):
         if stats["entries"]:
             stats["oldest_entry_age"] = max(entry["age_seconds"] for entry in stats["entries"])
             stats["newest_entry_age"] = min(entry["age_seconds"] for entry in stats["entries"])
-            stats["average_entry_age"] = sum(entry["age_seconds"] for entry in stats["entries"]) / len(stats["entries"])
+            stats["average_entry_age"] = sum(entry["age_seconds"]
+                                             for entry in stats["entries"]) / len(stats["entries"])
             stats["total_size_estimate"] = sum(entry["size_estimate"] for entry in stats["entries"])
 
         return JSONResponse(content=stats)
     except Exception as e:
         log_error(e, context="Getting cache statistics")
         raise convert_to_http_exception(e, status_code=500,
-            detail="Error retrieving cache statistics") from e
+                                        detail="Error retrieving cache statistics") from e
 
 
 @app.post("/admin/cache/clear")
-async def clear_all_cache(auth_info: tuple = Depends(require_auth)):
+async def clear_all_cache(_auth_info: tuple = Depends(require_auth)):
     """Clear all items in the cache.
 
     Returns:
@@ -972,7 +1023,7 @@ async def clear_all_cache(auth_info: tuple = Depends(require_auth)):
 async def invalidate_specific_cache(
     endpoint: str = None,
     username: str = None,
-    auth_info: tuple = Depends(require_auth)
+    _auth_info: tuple = Depends(require_auth)
 ):
     """Invalidate cache for a specific endpoint.
 
@@ -1003,11 +1054,68 @@ async def invalidate_specific_cache(
         raise CacheError(f"Failed to invalidate cache for {endpoint}") from e
 
 
+async def _proxy_authenticated_image(url: str, token: str) -> Response:
+    """Fetch an Audiobookshelf image using the authenticated OPDS token."""
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as upstream:
+                if upstream.status in (401, 403):
+                    raise HTTPException(
+                        status_code=401, detail="Audiobookshelf image authentication failed")
+                if upstream.status == 404:
+                    raise HTTPException(status_code=404, detail="Image not found")
+                upstream.raise_for_status()
+                content = await upstream.read()
+                media_type = upstream.headers.get("Content-Type", "image/jpeg")
+                return Response(content=content, media_type=media_type)
+    except aiohttp.ClientError as exc:
+        logger.error("Error proxying Audiobookshelf image: %s", str(exc))
+        raise HTTPException(
+            status_code=502, detail="Unable to fetch image from Audiobookshelf") from exc
+
+
+@app.get("/opds/proxy/cover/{item_id}")
+async def proxy_cover(
+    item_id: str,
+    auth_info: tuple = Depends(get_authenticated_user)
+):
+    """Proxy a book cover so OPDS clients do not need ABS credentials."""
+    _, token, _ = auth_info
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required for covers",
+            headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
+        )
+    return await _proxy_authenticated_image(
+        f"{AUDIOBOOKSHELF_API}/items/{item_id}/cover?format=jpeg", token
+    )
+
+
+@app.get("/opds/proxy/author-image/{author_id}")
+async def proxy_author_image(
+    author_id: str,
+    auth_info: tuple = Depends(get_authenticated_user)
+):
+    """Proxy an author image so OPDS clients do not need ABS credentials."""
+    _, token, _ = auth_info
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required for author images",
+            headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
+        )
+    return await _proxy_authenticated_image(
+        f"{AUDIOBOOKSHELF_API}/authors/{author_id}/image?format=jpeg", token
+    )
+
+
 @app.get("/opds/proxy/download/{item_id}/file/{file_ino}")
 async def proxy_download(
     item_id: str,
     file_ino: str,
-    request: Request,
+    _request: Request,
     auth_info: tuple = Depends(get_authenticated_user)
 ):
     """Proxy file downloads from Audiobookshelf to handle authentication properly.
@@ -1026,10 +1134,7 @@ async def proxy_download(
     Returns:
         StreamingResponse: The file content stream
     """
-    from fastapi.responses import StreamingResponse
-    import aiohttp
-
-    username, token, display_name = auth_info
+    _username, token, _display_name = auth_info
 
     if not token:
         # Log at debug level instead of error since this is expected behavior
@@ -1050,61 +1155,102 @@ async def proxy_download(
     headers = {"Authorization": f"Bearer {token}"}
     logger.debug("Making authenticated request to %s", url)
 
-    async def stream_file():
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(url, headers=headers) as response:
-                    response.raise_for_status()
-                    logger.debug("Received successful response from Audiobookshelf API with status %s", response.status)
-
-                    # Stream the response content
-                    async for chunk in response.content.iter_any():
-                        yield chunk
-
-            except aiohttp.ClientResponseError as e:
-                logger.error("Error proxying download: %s - %s", e.status, str(e))
-                # Re-raise as HTTPException with appropriate status
-                raise HTTPException(status_code=e.status, detail=f"Error fetching file: {str(e)}")
-            except Exception as e:
-                logger.error("Unexpected error proxying download: %s", str(e))
-                raise HTTPException(status_code=500, detail=f"Error downloading file: {str(e)}")
-
     try:
         # Make a HEAD request first to get content headers without downloading the file
-        response_headers = {}
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.head(url, headers=headers) as head_response:
-                    head_response.raise_for_status()
-
-                    # Get content type for proper MIME type handling
-                    content_type = head_response.headers.get("Content-Type", "application/octet-stream")
-
-                    # Set the same headers we received from Audiobookshelf
-                    for header_name, header_value in head_response.headers.items():
-                        if header_name.lower() in ("content-type", "content-disposition", "content-length"):
-                            response_headers[header_name] = header_value
-
-                    logger.debug("Proxying download with content type: %s", content_type)
-
-                    # Make sure we have a content-disposition header for proper filename
-                    if "content-disposition" not in {k.lower(): v for k, v in response_headers.items()}:
-                        filename = f"book-{item_id}.epub"
-                        response_headers["Content-Disposition"] = f'attachment; filename="{filename}"'
-
-            except Exception as e:
-                logger.warning("Error making HEAD request, continuing without headers: %s", str(e))
-                # If HEAD request fails, we'll continue without the headers
-                content_type = "application/octet-stream"
-                response_headers = {}
+        content_type, response_headers = await _fetch_download_head_info(url, headers, item_id)
 
         # Return a streaming response with the file content and appropriate headers
         return StreamingResponse(
-            stream_file(),
+            _stream_download_file(url, headers),
             media_type=content_type,
             headers=response_headers
         )
 
     except Exception as e:
         logger.error("Error setting up download proxy: %s", str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to set up download: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to set up download: {str(e)}") from e
+
+
+async def _stream_download_file(url, headers):
+    """Stream a file's content from Audiobookshelf, translating errors to HTTPException.
+
+    Args:
+        url: The Audiobookshelf download URL.
+        headers: Request headers (including the Bearer auth token).
+
+    Yields:
+        bytes: Chunks of the file's content.
+
+    Raises:
+        HTTPException: If the upstream request fails.
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                logger.debug(
+                    "Received successful response from Audiobookshelf API "
+                    "with status %s",
+                    response.status,
+                )
+
+                # Stream the response content
+                async for chunk in response.content.iter_any():
+                    yield chunk
+
+        except aiohttp.ClientResponseError as e:
+            logger.error("Error proxying download: %s - %s", e.status, str(e))
+            # Re-raise as HTTPException with appropriate status
+            raise HTTPException(
+                status_code=e.status, detail=f"Error fetching file: {str(e)}") from e
+        except Exception as e:
+            logger.error("Unexpected error proxying download: %s", str(e))
+            raise HTTPException(
+                status_code=500, detail=f"Error downloading file: {str(e)}") from e
+
+
+async def _fetch_download_head_info(url, headers, item_id):
+    """HEAD the download URL to get its content type and forwardable headers.
+
+    Args:
+        url: The Audiobookshelf download URL.
+        headers: Request headers (including the Bearer auth token).
+        item_id: The item's ID (used only to build a fallback filename).
+
+    Returns:
+        tuple: (content_type, response_headers) - falls back to a generic
+            content type and empty headers if the HEAD request fails.
+    """
+    response_headers = {}
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.head(url, headers=headers) as head_response:
+                head_response.raise_for_status()
+
+                # Get content type for proper MIME type handling
+                content_type = head_response.headers.get(
+                    "Content-Type", "application/octet-stream")
+
+                # Set the same headers we received from Audiobookshelf
+                for header_name, header_value in head_response.headers.items():
+                    if header_name.lower() in (
+                            "content-type", "content-disposition", "content-length"):
+                        response_headers[header_name] = header_value
+
+                logger.debug("Proxying download with content type: %s", content_type)
+
+                # Make sure we have a content-disposition header for proper filename
+                if "content-disposition" not in {
+                        k.lower(): v for k, v in response_headers.items()}:
+                    filename = f"book-{item_id}.epub"
+                    response_headers["Content-Disposition"] = (
+                        f'attachment; filename="{filename}"'
+                    )
+
+                return content_type, response_headers
+
+        except Exception as e:
+            logger.warning("Error making HEAD request, continuing without headers: %s", str(e))
+            # If HEAD request fails, we'll continue without the headers
+            return "application/octet-stream", {}

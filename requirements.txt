@@ -1,6 +1,6 @@
 aiohttp
-asyncio
 fastapi
 jinja2
+markupsafe
 uvicorn
 lxml

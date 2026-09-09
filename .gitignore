@@ -2,3 +2,9 @@ __pycache__/
 .DS_Store
 *.py.swp
 .env
+
+# Runtime cache
+opds_abs/data/cache.pkl
+
+# Coverage reports
+.coverage
