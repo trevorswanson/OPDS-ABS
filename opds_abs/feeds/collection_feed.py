@@ -151,107 +151,21 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             logger.debug("Generating collection items feed for collection %s (page %d)",
                          collection_id, page)
 
-            # Get collection details first to get the name
-            collection_info = await self.get_collection_details(
-                    username,
-                    collection_id,
-                    token=token
-            )
-            collection_name = collection_info.get("name", "Unknown Collection")
-
-            # Get items in the collection
-            collection_items = await self.get_items_in_collection(
-                    username,
-                    library_id,
-                    collection_id,
-                    token=token
-            )
-
-            # Create the feed
-            feed = self.create_base_feed(username, library_id, token=token)
-
-            # Build the feed metadata
-            feed_data = {
-                "id": {"_text": f"{library_id}/collections/{collection_id}"},
-                "title": {"_text": collection_name}
-            }
-
-            # Convert feed metadata to XML
-            dict_to_xml(feed, feed_data)
+            collection_name, collection_items, feed = await self._prepare_collection_feed(
+                username, library_id, collection_id, token)
 
             if not collection_items:
-                error_data = {
-                    "entry": {
-                        "title": {"_text": "No books found"},
-                        "content": {
-                            "_text": (
-                                f"No books in the {collection_name} collection with ebooks "
-                                "were found in this library."
-                            )
-                        }
-                    }
-                }
-                dict_to_xml(feed, error_data)
-                return self.create_response(feed)
+                return self._no_collection_books_response(feed, collection_name)
 
-            # Check if pagination is enabled
-            if not PAGINATION_ENABLED:
-                # Pagination is disabled, show all items
-                per_page = 0
-                no_pagination = True
-            else:
-                # Use items per page from config if not specified
-                per_page = ITEMS_PER_PAGE if per_page is None else per_page
-                # If per_page is 0, we'll show all items without pagination
-                no_pagination = per_page <= 0
-
-            # Apply pagination
-            total_books = len(collection_items)
-            total_pages = 1 if no_pagination else (
-                total_books + per_page - 1) // per_page  # Ceiling division
-
-            # Adjust page number if out of bounds
-            if page < 1:
-                page = 1
-            elif 0 < total_pages < page:
-                page = total_pages
-
-            if no_pagination:
-                # No pagination, show all items
-                paged_items = collection_items
-            else:
-                # Calculate start and end indices
-                start_idx = (page - 1) * per_page
-                end_idx = min(start_idx + per_page, total_books)
-
-                # Get the subset of books for this page
-                paged_items = collection_items[start_idx:end_idx]
+            paged_items, page, total_pages, no_pagination = (
+                self._paginate_collection_items(collection_items, page, per_page))
 
             # Add pagination links only if pagination is enabled
             if not no_pagination:
                 self._add_pagination_links(feed, username, library_id,
                                            collection_id, page, total_pages, token)
 
-            # Get ebook files in optimal batch sizes to avoid overwhelming the server
-            batch_size = 5  # Adjust based on server capacity
-            tasks = []
-
-            for book in paged_items:
-                book_id = book.get("id", "")
-                if book_id:
-                    tasks.append(get_download_urls_from_item(
-                        book_id, username=username, token=token))
-
-            # Process in batches if we have a lot of books
-            for i in range(0, len(tasks), batch_size):
-                batch_tasks = tasks[i:i+batch_size]
-                batch_results = await asyncio.gather(*batch_tasks)
-
-                # Add each book from this batch to the feed
-                for j, ebook_info in enumerate(batch_results):
-                    book_index = i + j
-                    if book_index < len(paged_items):
-                        self.add_book_to_feed(feed, paged_items[book_index], ebook_info, "", token)
+            await self._add_paged_books_to_feed(feed, paged_items, username, token)
 
             return self.create_response(feed)
 
@@ -262,6 +176,150 @@ class CollectionFeedGenerator(BaseFeedGenerator):
 
             # Use handle_exception to return a standardized error response
             return handle_exception(e, context=context)
+
+    async def _prepare_collection_feed(self, username, library_id, collection_id, token):
+        """Fetch the collection's name/items and set up the base feed with metadata.
+
+        Args:
+            username (str): The username requesting the feed.
+            library_id (str): The ID of the library to generate the feed for.
+            collection_id (str): The ID of the collection to filter by.
+            token (str, optional): Authentication token for Audiobookshelf.
+
+        Returns:
+            tuple: (collection_name, collection_items, feed) - the collection's
+                display name, its ebook items, and the feed with base metadata set.
+        """
+        # Get collection details first to get the name
+        collection_info = await self.get_collection_details(
+                username,
+                collection_id,
+                token=token
+        )
+        collection_name = collection_info.get("name", "Unknown Collection")
+
+        # Get items in the collection
+        collection_items = await self.get_items_in_collection(
+                username,
+                library_id,
+                collection_id,
+                token=token
+        )
+
+        # Create the feed
+        feed = self.create_base_feed(username, library_id, token=token)
+
+        # Build the feed metadata
+        feed_data = {
+            "id": {"_text": f"{library_id}/collections/{collection_id}"},
+            "title": {"_text": collection_name}
+        }
+
+        # Convert feed metadata to XML
+        dict_to_xml(feed, feed_data)
+
+        return collection_name, collection_items, feed
+
+    def _no_collection_books_response(self, feed, collection_name):
+        """Build the response for a collection with no ebooks in the library.
+
+        Args:
+            feed: The XML feed object to add the error entry to.
+            collection_name (str): The collection's display name.
+
+        Returns:
+            Response: A FastAPI response object containing the XML feed.
+        """
+        error_data = {
+            "entry": {
+                "title": {"_text": "No books found"},
+                "content": {
+                    "_text": (
+                        f"No books in the {collection_name} collection with ebooks "
+                        "were found in this library."
+                    )
+                }
+            }
+        }
+        dict_to_xml(feed, error_data)
+        return self.create_response(feed)
+
+    @staticmethod
+    def _paginate_collection_items(collection_items, page, per_page):
+        """Compute the paginated page of collection items to render.
+
+        Args:
+            collection_items (list): All ebook items in the collection.
+            page (int): The requested page number (1-indexed).
+            per_page (int, optional): Requested items per page; None uses config default.
+
+        Returns:
+            tuple: (paged_items, page, total_pages, no_pagination)
+        """
+        # Check if pagination is enabled
+        if not PAGINATION_ENABLED:
+            # Pagination is disabled, show all items
+            per_page = 0
+            no_pagination = True
+        else:
+            # Use items per page from config if not specified
+            per_page = ITEMS_PER_PAGE if per_page is None else per_page
+            # If per_page is 0, we'll show all items without pagination
+            no_pagination = per_page <= 0
+
+        # Apply pagination
+        total_books = len(collection_items)
+        total_pages = 1 if no_pagination else (
+            total_books + per_page - 1) // per_page  # Ceiling division
+
+        # Adjust page number if out of bounds
+        if page < 1:
+            page = 1
+        elif 0 < total_pages < page:
+            page = total_pages
+
+        if no_pagination:
+            # No pagination, show all items
+            paged_items = collection_items
+        else:
+            # Calculate start and end indices
+            start_idx = (page - 1) * per_page
+            end_idx = min(start_idx + per_page, total_books)
+
+            # Get the subset of books for this page
+            paged_items = collection_items[start_idx:end_idx]
+
+        return paged_items, page, total_pages, no_pagination
+
+    async def _add_paged_books_to_feed(self, feed, paged_items, username, token):
+        """Fetch ebook files in batches and add each paged book to the feed.
+
+        Args:
+            feed: The XML feed object to add book entries to.
+            paged_items (list): The page of books to add.
+            username (str): The username of the authenticated user.
+            token (str, optional): Authentication token for Audiobookshelf.
+        """
+        # Get ebook files in optimal batch sizes to avoid overwhelming the server
+        batch_size = 5  # Adjust based on server capacity
+        tasks = []
+
+        for book in paged_items:
+            book_id = book.get("id", "")
+            if book_id:
+                tasks.append(get_download_urls_from_item(
+                    book_id, username=username, token=token))
+
+        # Process in batches if we have a lot of books
+        for i in range(0, len(tasks), batch_size):
+            batch_tasks = tasks[i:i+batch_size]
+            batch_results = await asyncio.gather(*batch_tasks)
+
+            # Add each book from this batch to the feed
+            for j, ebook_info in enumerate(batch_results):
+                book_index = i + j
+                if book_index < len(paged_items):
+                    self.add_book_to_feed(feed, paged_items[book_index], ebook_info, "", token)
 
     def _add_pagination_links(self, feed, username, library_id, collection_id,
                               current_page, total_pages, token=None):
