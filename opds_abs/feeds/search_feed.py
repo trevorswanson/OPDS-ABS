@@ -430,11 +430,7 @@ class SearchFeedGenerator(BaseFeedGenerator):
         if series_id in series_author_map and series_author_map[series_id]["most_common"]:
             return series_author_map[series_id]["most_common"]
 
-        # If we have no series books, we can't continue
-        if not series_books:
-            return "Unknown Author"
-
-        # Create a set of book IDs for O(1) lookup
+        # Create a set of book IDs for O(1) lookup; empty if series_books is empty
         series_book_ids = {book.get("id") for book in series_books if book.get("id")}
 
         if not series_book_ids:

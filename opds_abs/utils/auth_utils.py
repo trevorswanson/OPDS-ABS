@@ -330,6 +330,82 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
         raise AuthenticationError(f"API key authentication error: {str(e)}") from e
 
 
+def _parse_basic_auth_header(
+        auth_info: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Decode a Basic Authorization header into username/password (or apikey).
+
+    Args:
+        auth_info: The base64-encoded credential portion of the header.
+
+    Returns:
+        Tuple of (username, password, api_key) or (None, None, None) if not found
+    """
+    try:
+        decoded = base64.b64decode(auth_info).decode("utf-8")
+        logger.debug("Decoded Basic auth: %s:***", decoded.split(':')[0])
+
+        # Check if this is username:password format
+        if ":" in decoded:
+            parts = decoded.split(":", 1)
+            if len(parts) == 2:
+                username, credential = parts
+
+                # Examine credentials that look like API keys when API key auth is disabled.
+                if len(credential) >= 32 and not API_KEY_AUTH_ENABLED:
+                    logger.warning(
+                        "Credential for %s looks like an API key (length %s) "
+                        "but API_KEY_AUTH_ENABLED is False. Authentication may fail.",
+                        username, len(credential)
+                    )
+
+                # Return as a password; authentication handles it based on settings.
+                return username, credential, None
+
+        logger.warning("Basic auth doesn't contain username:password format")
+    except Exception as e:
+        logger.warning("Error decoding Basic auth: %s", e)
+
+    return None, None, None
+
+
+def _parse_bearer_auth_header(
+        request: Request, auth_info: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Extract a username and API key from a Bearer Authorization header.
+
+    Args:
+        request: The FastAPI request object
+        auth_info: The bearer token portion of the header.
+
+    Returns:
+        Tuple of (username, password, api_key) or (None, None, None) if disabled
+    """
+    # Check if API key authentication is enabled
+    if not API_KEY_AUTH_ENABLED:
+        logger.warning(
+            "Bearer token found but API_KEY_AUTH_ENABLED is False. "
+            "Authentication will fail.")
+        return None, None, None
+
+    logger.debug("Found Bearer token in Authorization header")
+    # For Bearer token, we need the username from another source
+    # Check query parameters for username
+    username = request.query_params.get("username")
+    if username:
+        logger.debug("Using username from query parameters: %s", username)
+        return username, None, auth_info
+
+    # If no username in query, check headers
+    username = request.headers.get("X-Username")
+    if username:
+        logger.debug("Using username from X-Username header: %s", username)
+        return username, None, auth_info
+
+    # If no username provided, use a special value to indicate this is an API key
+    # authentication request without username - we'll try to get it from Audiobookshelf
+    logger.debug("No username found for Bearer token, using api_key_user placeholder")
+    return "api_key_user", None, auth_info
+
+
 def get_credentials_from_request(
         request: Request) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Extract credentials from Authorization header.
@@ -366,61 +442,12 @@ def get_credentials_from_request(
 
         # Handle Basic Auth (username:password or username:apikey)
         if auth_type.lower() == "basic":
-            try:
-                decoded = base64.b64decode(auth_info).decode("utf-8")
-                logger.debug("Decoded Basic auth: %s:***", decoded.split(':')[0])
-
-                # Check if this is username:password format
-                if ":" in decoded:
-                    parts = decoded.split(":", 1)
-                    if len(parts) == 2:
-                        username, credential = parts
-
-                        # Examine credentials that look like API keys when API key auth is disabled.
-                        if len(credential) >= 32 and not API_KEY_AUTH_ENABLED:
-                            logger.warning(
-                                "Credential for %s looks like an API key (length %s) "
-                                "but API_KEY_AUTH_ENABLED is False. Authentication may fail.",
-                                username, len(credential)
-                            )
-
-                        # Return as a password; authentication handles it based on settings.
-                        return username, credential, None
-
-                logger.warning("Basic auth doesn't contain username:password format")
-            except Exception as e:
-                logger.warning("Error decoding Basic auth: %s", e)
-
-            return None, None, None
+            return _parse_basic_auth_header(auth_info)
 
         # Handle API Key Auth in the Authorization: Bearer <api_key> format
         # This is for API clients using the Audiobookshelf API directly
         if auth_type.lower() == "bearer":
-            # Check if API key authentication is enabled
-            if not API_KEY_AUTH_ENABLED:
-                logger.warning(
-                    "Bearer token found but API_KEY_AUTH_ENABLED is False. "
-                    "Authentication will fail.")
-                return None, None, None
-
-            logger.debug("Found Bearer token in Authorization header")
-            # For Bearer token, we need the username from another source
-            # Check query parameters for username
-            username = request.query_params.get("username")
-            if username:
-                logger.debug("Using username from query parameters: %s", username)
-                return username, None, auth_info
-
-            # If no username in query, check headers
-            username = request.headers.get("X-Username")
-            if username:
-                logger.debug("Using username from X-Username header: %s", username)
-                return username, None, auth_info
-
-            # If no username provided, use a special value to indicate this is an API key
-            # authentication request without username - we'll try to get it from Audiobookshelf
-            logger.debug("No username found for Bearer token, using api_key_user placeholder")
-            return "api_key_user", None, auth_info
+            return _parse_bearer_auth_header(request, auth_info)
 
         logger.warning("Unsupported authorization type: %s", auth_type)
 
