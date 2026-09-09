@@ -1,15 +1,13 @@
 """Authors feed generator."""
 # Standard library imports
 import logging
-import asyncio
 from typing import Dict, Any, List, Optional
 
 # Local application imports
 from opds_abs.core.feed_generator import BaseFeedGenerator
-from opds_abs.api.client import fetch_from_api, get_download_urls_from_item
-from opds_abs.config import ITEMS_PER_PAGE, PAGINATION_ENABLED
+from opds_abs.api.client import fetch_from_api
 from opds_abs.utils import dict_to_xml
-from opds_abs.utils.cache_utils import get_cached_library_items, get_cached_author_details
+from opds_abs.utils.cache_utils import get_cached_library_items, get_cached_author_details, has_ebook
 from opds_abs.utils.error_utils import (
     FeedGenerationError,
     ResourceNotFoundError,
@@ -110,11 +108,7 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                     # Check author match
                     item.get("media", {}).get("metadata", {}).get("authorName") == author_name and
                     # Check for presence of ebook
-                    (
-                        item.get("media", {}).get("ebookFile") is not None or
-                        (item.get("media", {}).get("ebookFormat") is not None and
-                         item.get("media", {}).get("ebookFormat"))
-                    )
+                    has_ebook(item.get("media", {}))
                 )
             ]
 
@@ -204,14 +198,14 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                 return self._no_author_books_response(feed, author_name)
 
             paged_items, page, total_pages, no_pagination = (
-                self._paginate_author_items(library_items, page, per_page))
+                self.paginate_page_items(library_items, page, per_page))
 
             # Add pagination links only if pagination is enabled
             if not no_pagination:
-                self._add_pagination_links_for_author(
-                    feed, username, library_id, author_id, page, total_pages, token)
+                base_url = f"/opds/{username}/libraries/{library_id}/authors/{author_id}"
+                self.add_page_pagination_links(feed, base_url, page, total_pages, token)
 
-            await self._add_paged_books_to_feed(feed, paged_items, username, token)
+            await self.add_paged_books_to_feed(feed, paged_items, username, token)
 
             return self.create_response(feed)
 
@@ -243,150 +237,6 @@ class AuthorFeedGenerator(BaseFeedGenerator):
         }
         dict_to_xml(feed, error_data)
         return self.create_response(feed)
-
-    @staticmethod
-    def _paginate_author_items(library_items, page, per_page):
-        """Compute the paginated page of author items to render.
-
-        Args:
-            library_items (list): All items by the author, already filtered and sorted.
-            page (int): The requested page number (1-indexed).
-            per_page (int, optional): Requested items per page; None uses config default.
-
-        Returns:
-            tuple: (paged_items, page, total_pages, no_pagination)
-        """
-        # Check if pagination is enabled
-        if not PAGINATION_ENABLED:
-            # Pagination is disabled, show all items
-            per_page = 0
-            no_pagination = True
-        else:
-            # Use items per page from config if not specified
-            per_page = ITEMS_PER_PAGE if per_page is None else per_page
-            # If per_page is 0, we'll show all items without pagination
-            no_pagination = per_page <= 0
-
-        # Apply pagination
-        total_books = len(library_items)
-        total_pages = 1 if no_pagination else (
-            total_books + per_page - 1) // per_page  # Ceiling division
-
-        # Adjust page number if out of bounds
-        if page < 1:
-            page = 1
-        elif 0 < total_pages < page:
-            page = total_pages
-
-        if no_pagination:
-            # No pagination, show all items
-            paged_items = library_items
-        else:
-            # Calculate start and end indices
-            start_idx = (page - 1) * per_page
-            end_idx = min(start_idx + per_page, total_books)
-
-            # Get the subset of books for this page
-            paged_items = library_items[start_idx:end_idx]
-
-        return paged_items, page, total_pages, no_pagination
-
-    async def _add_paged_books_to_feed(self, feed, paged_items, username, token):
-        """Fetch ebook files in batches and add each paged book to the feed.
-
-        Args:
-            feed: The XML feed object to add book entries to.
-            paged_items (list): The page of books to add.
-            username (str): The username of the authenticated user.
-            token (str, optional): Authentication token for Audiobookshelf.
-        """
-        # Get ebook files in optimal batch sizes to avoid overwhelming the server
-        tasks = []
-        for book in paged_items:
-            book_id = book.get("id", "")
-            if book_id:
-                tasks.append(get_download_urls_from_item(
-                    book_id, username=username, token=token))
-
-        # Process in batches if we have a lot of books
-        batch_size = 5  # Adjust based on server capacity
-
-        # Process all books on the current page
-        for i in range(0, len(tasks), batch_size):
-            batch_tasks = tasks[i:i+batch_size]
-            batch_results = await asyncio.gather(*batch_tasks)
-
-            # Add each book from this batch to the feed
-            for j, ebook_info in enumerate(batch_results):
-                book_index = i + j
-                if book_index < len(paged_items):
-                    self.add_book_to_feed(feed, paged_items[book_index], ebook_info, "", token)
-
-    def _add_pagination_links_for_author(
-            self, feed, username: str, library_id: str, author_id: str,
-            current_page: int, total_pages: int,
-            token: Optional[str] = None):
-        """Add pagination links to the author items feed.
-
-        Args:
-            feed: The XML feed object to add links to
-            username: The username for URLs
-            library_id: The library ID for URLs
-            author_id: The author ID for URLs
-            current_page: Current page number
-            total_pages: Total number of pages
-            token: Optional token to include in URLs
-        """
-        # Base URL for pagination
-        base_url = f"/opds/{username}/libraries/{library_id}/authors/{author_id}"
-        token_param = f"&token={token}" if token else ""
-
-        # Add pagination links
-        links = []
-
-        # First page link
-        if current_page > 1:
-            links.append({
-                "_attrs": {
-                    "rel": "first",
-                    "href": f"{base_url}?page=1{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Previous page link
-        if current_page > 1:
-            links.append({
-                "_attrs": {
-                    "rel": "previous",
-                    "href": f"{base_url}?page={current_page-1}{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Next page link
-        if current_page < total_pages:
-            links.append({
-                "_attrs": {
-                    "rel": "next",
-                    "href": f"{base_url}?page={current_page+1}{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Last page link
-        if current_page < total_pages:
-            links.append({
-                "_attrs": {
-                    "rel": "last",
-                    "href": f"{base_url}?page={total_pages}{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Add links to feed
-        for link in links:
-            dict_to_xml(feed, {"link": link})
 
     def add_author_to_feed(
             self, username: str, library_id: str, feed, author: Dict[str, Any],
@@ -559,8 +409,8 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                         "Could not find any authors with ebooks in the library")
                 else:
                     # Add pagination links
-                    self._add_pagination_links(
-                        feed, username, library_id, page, total_pages, token)
+                    base_url = f"/opds/{username}/libraries/{library_id}/authors"
+                    self.add_page_pagination_links(feed, base_url, page, total_pages, token)
 
                     # Add each author to the feed
                     for author in paged_authors:
@@ -647,66 +497,3 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             }
         }
         dict_to_xml(feed, error_data)
-
-    def _add_pagination_links(self, feed, username: str, library_id: str,
-                              current_page: int, total_pages: int, token: Optional[str] = None):
-        """Add pagination links to the feed.
-
-        Args:
-            feed: The XML feed object to add links to
-            username: The username for URLs
-            library_id: The library ID for URLs
-            current_page: Current page number
-            total_pages: Total number of pages
-            token: Optional token to include in URLs
-        """
-        # Base URL for pagination
-        base_url = f"/opds/{username}/libraries/{library_id}/authors"
-        token_param = f"&token={token}" if token else ""
-
-        # Add pagination links
-        links = []
-
-        # First page link
-        if current_page > 1:
-            links.append({
-                "_attrs": {
-                    "rel": "first",
-                    "href": f"{base_url}?page=1{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Previous page link
-        if current_page > 1:
-            links.append({
-                "_attrs": {
-                    "rel": "previous",
-                    "href": f"{base_url}?page={current_page-1}{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Next page link
-        if current_page < total_pages:
-            links.append({
-                "_attrs": {
-                    "rel": "next",
-                    "href": f"{base_url}?page={current_page+1}{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Last page link
-        if current_page < total_pages:
-            links.append({
-                "_attrs": {
-                    "rel": "last",
-                    "href": f"{base_url}?page={total_pages}{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Add links to feed
-        for link in links:
-            dict_to_xml(feed, {"link": link})

@@ -55,9 +55,11 @@ Option 2: Bearer Token (for direct API access)
 import base64
 import logging
 from typing import Optional, Tuple, Dict
+from urllib.parse import urlparse
 import aiohttp
 
 from fastapi import Request, HTTPException
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBasic
 
 from opds_abs.config import (
@@ -744,6 +746,57 @@ async def require_auth(request: Request) -> Tuple[str, str, str]:
         )
 
     return username, token, display_name
+
+
+def resolve_effective_username(
+        auth_username: Optional[str],
+        username: str,
+        display_name: Optional[str],
+        path_suffix: str,
+        query_params: Optional[Dict[str, str]] = None) -> Tuple[str, Optional[RedirectResponse]]:
+    """Resolve which username a route should serve, redirecting if needed.
+
+    Audiobookshelf's display_name comes from its authentication response
+    rather than FastAPI's path routing, so if the requested path username
+    doesn't match it, this builds and validates a redirect to the
+    authenticated user's canonical path instead of serving the mismatched one.
+
+    Args:
+        auth_username: The authenticated username, or None if unauthenticated.
+        username: The username path parameter from the request.
+        display_name: The authenticated user's display name.
+        path_suffix: The path segment(s) after "/opds/{username}" to redirect to.
+        query_params: Optional query parameters to preserve on the redirect.
+
+    Returns:
+        tuple: (effective_username, redirect) - the username a route should
+            serve, and a RedirectResponse a route must return immediately
+            instead (or None if no redirect is needed). Kept as two
+            separately-typed values, rather than a single str-or-Response
+            union, so callers - and static analysis - can't mistake one for
+            the other.
+    """
+    effective_username = display_name if auth_username else username
+    if not (AUTH_ENABLED and auth_username and username != display_name):
+        return effective_username, None
+
+    target = f"/opds/{display_name}{path_suffix}"
+    if query_params:
+        params_str = "&".join(f"{k}={v}" for k, v in query_params.items())
+        if params_str:
+            target += f"?{params_str}"
+    target = target.replace("\\", "")
+    if not urlparse(target).netloc and not urlparse(target).scheme:
+        # Confirmed false positive: target always starts with the
+        # hardcoded "/opds/" prefix above, so it can never become an
+        # absolute or protocol-relative redirect regardless of
+        # display_name's contents.
+        # codeql[py/url-redirection]
+        return None, RedirectResponse(url=target)
+    # display_name failed validation; fail closed by serving the
+    # already-routed (framework-constrained) username instead of
+    # building another redirect target out of further request data.
+    return username, None
 
 
 def get_token_for_username(username: str) -> Optional[str]:

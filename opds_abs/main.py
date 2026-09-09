@@ -51,6 +51,7 @@ from urllib.parse import urlparse
 
 # Third-party imports
 import aiohttp
+from markupsafe import escape
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import (
     HTMLResponse,
@@ -83,7 +84,11 @@ from opds_abs.utils.cache_utils import (
     save_cache_to_disk,
 )
 from opds_abs.api.client import invalidate_cache
-from opds_abs.utils.auth_utils import get_authenticated_user, require_auth
+from opds_abs.utils.auth_utils import (
+    get_authenticated_user,
+    require_auth,
+    resolve_effective_username,
+)
 from opds_abs.utils.error_utils import (
     OPDSBaseException,
     ResourceNotFoundError,
@@ -245,6 +250,46 @@ async def opds_exception_handler(request: Request, exc: OPDSBaseException):
     context = f"{request.method} {request.url.path}"
     return handle_exception(exc, context=context)
 
+def _extract_username_library_from_path(path: str) -> tuple:
+    """Pull the username and library_id path segments out of an OPDS route.
+
+    Args:
+        path (str): The request URL path, e.g. "/opds/alice/libraries/lib1/items".
+
+    Returns:
+        tuple: (username, library_id), either of which may be None if absent.
+    """
+    path_parts = path.split('/')
+    username = None
+    library_id = None
+
+    for i, part in enumerate(path_parts):
+        if part == "opds" and i+1 < len(path_parts):
+            username = path_parts[i+1]
+        if part == "libraries" and i+1 < len(path_parts):
+            library_id = path_parts[i+1]
+
+    return username, library_id
+
+
+def _build_opds_error_xml(error_id, message, context) -> str:
+    """Build an OPDS-compliant XML error document.
+
+    Args:
+        error_id: Identifier for the error (typically id(exc)).
+        message: Human-readable error message.
+        context: Description of what the application was doing.
+
+    Returns:
+        str: The OPDS-compliant XML error document.
+    """
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<error xmlns="http://opds-spec.org/2010/catalog">
+  <id>{error_id}</id>
+  <message>{message}</message>
+  <context>{context}</context>
+</error>"""
+
 # Custom exception handler for API connectivity errors
 
 
@@ -270,32 +315,14 @@ async def api_client_error_handler(request: Request, exc: APIClientError):
     # Get the context from the request path
     context = f"{request.method} {request.url.path}"
 
-    # Extract the username and library_id from the request path if possible
-    path_parts = request.url.path.split('/')
-    username = None
-    library_id = None
-
-    for i, part in enumerate(path_parts):
-        if part == "opds" and i+1 < len(path_parts):
-            username = path_parts[i+1]
-        if part == "libraries" and i+1 < len(path_parts):
-            library_id = path_parts[i+1]
-
     # Create a more specific context if we have the username and library_id
+    username, library_id = _extract_username_library_from_path(request.url.path)
     if username and library_id:
         context = f"Generating items feed for user {username}, library {library_id}"
 
-    # Create OPDS-compliant XML error response
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<error xmlns="http://opds-spec.org/2010/catalog">
-  <id>{error_id}</id>
-  <message>{str(exc)}</message>
-  <context>{context}</context>
-</error>"""
-
     # Return the XML response with proper content type
     return Response(
-        content=xml_content,
+        content=_build_opds_error_xml(error_id, str(exc), context),
         media_type="application/xml",
         status_code=503  # Service Unavailable
     )
@@ -321,34 +348,16 @@ async def authentication_error_handler(request: Request, exc: AuthenticationErro
     # Get the context from the request path
     context = f"{request.method} {request.url.path}"
 
-    # Extract the username and library_id from the request path if possible
-    path_parts = request.url.path.split('/')
-    username = None
-    library_id = None
-
-    for i, part in enumerate(path_parts):
-        if part == "opds" and i+1 < len(path_parts):
-            username = path_parts[i+1]
-        if part == "libraries" and i+1 < len(path_parts):
-            library_id = path_parts[i+1]
-
     # Create a more specific context if we have the username and library_id
+    username, library_id = _extract_username_library_from_path(request.url.path)
     if username and library_id:
         context = f"Authentication for user {username}, library {library_id}"
     elif username:
         context = f"Authentication for user {username}"
 
-    # Create OPDS-compliant XML error response
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<error xmlns="http://opds-spec.org/2010/catalog">
-  <id>{error_id}</id>
-  <message>{str(exc)}</message>
-  <context>{context}</context>
-</error>"""
-
     # Return the XML response with proper content type and WWW-Authenticate header
     return Response(
-        content=xml_content,
+        content=_build_opds_error_xml(error_id, str(exc), context),
         media_type="application/xml",
         status_code=401,
         headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
@@ -376,17 +385,10 @@ async def service_unavailable_handler(request: Request, exc: HTTPException):
     # Get the context from the request path
     context = f"{request.method} {request.url.path}"
 
-    # Create OPDS-compliant XML error response
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<error xmlns="http://opds-spec.org/2010/catalog">
-  <id>{error_id}</id>
-  <message>Audiobookshelf server is unavailable: {exc.detail}</message>
-  <context>{context}</context>
-</error>"""
-
     # Return the XML response with proper content type
     return Response(
-        content=xml_content,
+        content=_build_opds_error_xml(
+            error_id, f"Audiobookshelf server is unavailable: {exc.detail}", context),
         media_type="application/xml",
         status_code=503  # Service Unavailable
     )
@@ -493,28 +495,22 @@ async def search_xml(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            target = f"/opds/{display_name}/libraries/{library_id}/search.xml"
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/search.xml")
+        if redirect is not None:
+            return redirect
 
         params = dict(request.query_params)
+        # Explicitly escape values reflected into the template. Jinja2Templates
+        # already autoescapes "search.xml" via its default select_autoescape(),
+        # but escaping here as well removes any ambiguity for user-controlled
+        # input (searchTerms, token) reaching the response.
         return templates.TemplateResponse(request, "search.xml", {
-            "username": effective_username,
-            "library_id": library_id,
-            "searchTerms": params.get('q', ''),
-            "token": token  # Add token to the template context
+            "username": escape(effective_username),
+            "library_id": escape(library_id),
+            "searchTerms": escape(params.get('q', '')),
+            "token": escape(token) if token else token
         })
     except Exception as e:
         log_error(e, context=f"Rendering search XML for user {username}, library {library_id}")
@@ -540,21 +536,10 @@ async def opds_root(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            target = f"/opds/{display_name}"
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name, "")
+        if redirect is not None:
+            return redirect
 
         return await library_feed.generate_root_feed(
             effective_username,
@@ -589,21 +574,10 @@ async def opds_nav(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            target = f"/opds/{display_name}/libraries/{library_id}"
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name, f"/libraries/{library_id}")
+        if redirect is not None:
+            return redirect
 
         return await navigation_feed.generate_navigation_feed(
             effective_username,
@@ -641,25 +615,12 @@ async def opds_search(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            # Preserve search parameters in the redirect
-            params_str = "&".join([f"{k}={v}" for k, v in request.query_params.items()])
-            target = f"/opds/{display_name}/libraries/{library_id}/search"
-            if params_str:
-                target += f"?{params_str}"
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/search",
+            query_params=dict(request.query_params))
+        if redirect is not None:
+            return redirect
 
         params = dict(request.query_params)
         return await search_feed.generate_search_feed(
@@ -706,25 +667,12 @@ async def opds_library(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            # Preserve query parameters in the redirect
-            params_str = "&".join([f"{k}={v}" for k, v in request.query_params.items()])
-            target = f"/opds/{display_name}/libraries/{library_id}/items"
-            if params_str:
-                target += f"?{params_str}"
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/items",
+            query_params=dict(request.query_params))
+        if redirect is not None:
+            return redirect
 
         params = dict(request.query_params)
 
@@ -767,21 +715,10 @@ async def opds_series(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            target = f"/opds/{display_name}/libraries/{library_id}/series"
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name, f"/libraries/{library_id}/series")
+        if redirect is not None:
+            return redirect
 
         return await series_feed.generate_series_feed(
             effective_username,
@@ -828,21 +765,11 @@ async def opds_series_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            target = f"/opds/{display_name}/libraries/{library_id}/series/{series_id}"
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/series/{series_id}")
+        if redirect is not None:
+            return redirect
 
         return await series_feed.generate_series_items_feed(
             effective_username,
@@ -882,21 +809,10 @@ async def opds_collections(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            target = f"/opds/{display_name}/libraries/{library_id}/collections"
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name, f"/libraries/{library_id}/collections")
+        if redirect is not None:
+            return redirect
 
         return await collection_feed.generate_collections_feed(
             effective_username,
@@ -934,24 +850,11 @@ async def opds_collection_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            target = (
-                f"/opds/{display_name}/libraries/{library_id}/"
-                f"collections/{collection_id}"
-            )
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/collections/{collection_id}")
+        if redirect is not None:
+            return redirect
 
         return await collection_feed.generate_collection_items_feed(
             effective_username,
@@ -991,21 +894,10 @@ async def opds_authors(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            target = f"/opds/{display_name}/libraries/{library_id}/authors"
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name, f"/libraries/{library_id}/authors")
+        if redirect is not None:
+            return redirect
 
         return await author_feed.generate_authors_feed(
             effective_username,
@@ -1043,21 +935,11 @@ async def opds_author_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
-        effective_username = display_name if auth_username else username
-        if AUTH_ENABLED and auth_username and username != display_name:
-            target = f"/opds/{display_name}/libraries/{library_id}/authors/{author_id}"
-            target = target.replace("\\", "")
-            if not urlparse(target).netloc and not urlparse(target).scheme:
-                # Confirmed false positive: target always starts with the
-                # hardcoded "/opds/" prefix above, so it can never become an
-                # absolute or protocol-relative redirect regardless of
-                # display_name's contents.
-                # codeql[py/url-redirection]
-                return RedirectResponse(url=target)
-            # display_name failed validation; fail closed by serving the
-            # already-routed (framework-constrained) username instead of
-            # building another redirect target out of further request data.
-            effective_username = username
+        effective_username, redirect = resolve_effective_username(
+            auth_username, username, display_name,
+            f"/libraries/{library_id}/authors/{author_id}")
+        if redirect is not None:
+            return redirect
 
         return await author_feed.generate_author_items_feed(
             effective_username,

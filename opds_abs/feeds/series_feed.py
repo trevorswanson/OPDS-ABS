@@ -107,7 +107,7 @@ class SeriesFeedGenerator(BaseFeedGenerator):
 
             return None
         except Exception as e:
-            logger.error("Error fetching series details: %s", e)
+            log_error(e, context=f"Fetching series details for {series_id}")
             return None
 
     async def _fetch_series_items_via_api(self, username, library_id, series_id, token,
