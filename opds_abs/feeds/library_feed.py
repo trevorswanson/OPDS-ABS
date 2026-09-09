@@ -196,7 +196,8 @@ class LibraryFeedGenerator(BaseFeedGenerator):
             try:
                 # Directly fetch the collection with its books
                 collection_endpoint = f"/collections/{collection_id}"
-                collection_data = await fetch_from_api(collection_endpoint, username=username, token=token)
+                collection_data = await fetch_from_api(
+                    collection_endpoint, username=username, token=token)
 
                 # Only proceed if we have collection data with books
                 if collection_data and collection_data.get("books"):
@@ -211,7 +212,7 @@ class LibraryFeedGenerator(BaseFeedGenerator):
                         # Check for ebookFile
                         if media.get("ebookFile") is not None:
                             has_ebook = True
-                            # Make sure ebookFormat is set based on the file extension if it's missing
+                            # Set ebookFormat from the file extension when missing.
                             if media.get("ebookFormat") is None:
                                 # Extract format from ebookFile extension or set a default
                                 ebook_file = media.get("ebookFile", {})
@@ -255,15 +256,21 @@ class LibraryFeedGenerator(BaseFeedGenerator):
                             "author": {
                                 "name": {"_text": "OPDS Audiobookshelf"}
                             },
-                            "title": {"_text": f"{username}'s books in collection: {collection_data.get('name', 'Unknown')}"}
+                            "title": {
+                                "_text": (
+                                    f"{username}'s books in collection: "
+                                    f"{collection_data.get('name', 'Unknown')}"
+                                )
+                            }
                         }
                         dict_to_xml(feed, feed_data)
 
                         # Add pagination metadata and links
                         if not no_pagination:
                             self.add_pagination_metadata(feed, page, items_per_page, total_books)
-                            self.add_pagination_links(feed, current_path.rstrip('&?'),
-                                                      page, items_per_page, total_books, token=token)
+                            self.add_pagination_links(
+                                feed, current_path.rstrip('&?'), page,
+                                items_per_page, total_books, token=token)
 
                         # Get ebook files for each book
                         tasks = []
