@@ -110,6 +110,48 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             logger.error("Error fetching series details: %s", e)
             return None
 
+    async def _fetch_series_items_via_api(self, username, library_id, series_id, token,
+                                          extra_params=None):
+        """Fetch and filter library items for a series directly via the items API.
+
+        Args:
+            username (str): The username of the authenticated user.
+            library_id (str): ID of the library containing the items.
+            series_id (str): ID of the series to filter by.
+            token (str, optional): Authentication token for Audiobookshelf.
+            extra_params (dict, optional): Extra query params to merge in (e.g. sort).
+
+        Returns:
+            list: The filtered library items.
+        """
+        params = {"filter": f"series.{self.create_filter(series_id)}"}
+        if extra_params:
+            params.update(extra_params)
+        data = await fetch_from_api(
+                f"/libraries/{library_id}/items",
+                params,
+                username=username,
+                token=token
+        )
+        return self.filter_items(data)
+
+    def _build_fallback_series_details(self, series_id, filtered_items):
+        """Build minimal series details using the most common author of some items.
+
+        Args:
+            series_id (str): ID of the series.
+            filtered_items (list): Items to derive the most common author from.
+
+        Returns:
+            dict: Minimal series details with id, name, and authorName.
+        """
+        most_common_author = self.get_most_common_author(filtered_items)
+        return {
+            "id": series_id,
+            "name": "Unknown Series",
+            "authorName": most_common_author
+        }
+
     async def filter_items_by_series_id(self, username, library_id, series_id, token=None):
         """Filter items by series ID using cached items when possible.
 
@@ -136,33 +178,18 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             if not series_details:
                 logger.warning("Could not find series details for ID %s", series_id)
                 # Fall back to API call if we couldn't find the series details
-                params = {"filter": f"series.{self.create_filter(series_id)}"}
-                data = await fetch_from_api(
-                        f"/libraries/{library_id}/items",
-                        params,
-                        username=username,
-                        token=token
-                )
-                filtered_items = self.filter_items(data)
-                # Get the most common author from the filtered items
-                most_common_author = self.get_most_common_author(filtered_items)
-                # Create minimal series details with author information
-                series_details = {
-                        "id": series_id,
-                        "name": "Unknown Series",
-                        "authorName": most_common_author
-                }
+                filtered_items = await self._fetch_series_items_via_api(
+                    username, library_id, series_id, token)
+                series_details = self._build_fallback_series_details(series_id, filtered_items)
                 return filtered_items, series_details
 
             series_name = series_details.get("name", "Unknown Series")
             logger.debug("Found series details for: %s", series_name)
 
             # Extract book IDs from the series details
-            series_book_ids = []
-            for book in series_details.get("books", []):
-                book_id = book.get("id")
-                if book_id:
-                    series_book_ids.append(book_id)
+            series_book_ids = [
+                book.get("id") for book in series_details.get("books", []) if book.get("id")
+            ]
 
             if not series_book_ids:
                 logger.warning("No book IDs found in series %s", series_name)
@@ -193,10 +220,9 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             )
 
             # Filter the cached items by exact book ID match
-            filtered_items = []
-            for item in library_items:
-                if item.get("id") in series_book_ids:
-                    filtered_items.append(item)
+            filtered_items = [
+                item for item in library_items if item.get("id") in series_book_ids
+            ]
 
             logger.debug("Found %d matching items in cache for series %s",
                          len(filtered_items), series_name)
@@ -208,14 +234,8 @@ class SeriesFeedGenerator(BaseFeedGenerator):
                         "No matching items found in cache for series %s. "
                         "Trying API fallback."
                     ), series_name)
-                params = {"filter": f"series.{self.create_filter(series_id)}"}
-                data = await fetch_from_api(
-                        f"/libraries/{library_id}/items",
-                        params,
-                        username=username,
-                        token=token
-                )
-                filtered_items = self.filter_items(data)
+                filtered_items = await self._fetch_series_items_via_api(
+                    username, library_id, series_id, token)
 
             # Sort by series sequence number if available
             sorted_items = sorted(
@@ -241,25 +261,11 @@ class SeriesFeedGenerator(BaseFeedGenerator):
         except Exception as e:
             logger.error("Error filtering items by series: %s", e)
             # Fall back to API call if there was an error
-            params = {
-                    "filter": f"series.{self.create_filter(series_id)}",
-                    "sort": "media.metadata.series.number"
-            }
-            data = await fetch_from_api(
-                    f"/libraries/{library_id}/items",
-                    params,
-                    username=username,
-                    token=token
-            )
-            filtered_items = self.filter_items(data)
-            # Get the most common author from the filtered items
-            most_common_author = self.get_most_common_author(filtered_items)
+            filtered_items = await self._fetch_series_items_via_api(
+                username, library_id, series_id, token,
+                extra_params={"sort": "media.metadata.series.number"})
             # Create minimal series details with author information
-            series_details = {
-                    "id": series_id,
-                    "name": "Unknown Series",
-                    "authorName": most_common_author
-            }
+            series_details = self._build_fallback_series_details(series_id, filtered_items)
             return filtered_items, series_details
 
     async def generate_series_items_feed(self, username, library_id, series_id, token=None):
