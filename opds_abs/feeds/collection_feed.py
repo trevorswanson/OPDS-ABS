@@ -183,7 +183,12 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                 error_data = {
                     "entry": {
                         "title": {"_text": "No books found"},
-                        "content": {"_text": f"No books in the {collection_name} collection with ebooks were found in this library."}
+                        "content": {
+                            "_text": (
+                                f"No books in the {collection_name} collection with ebooks "
+                                "were found in this library."
+                            )
+                        }
                     }
                 }
                 dict_to_xml(feed, error_data)
@@ -345,7 +350,10 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             books_with_ebooks = [
                 book for book in collection.get("books", [])
                 if (book.get("media", {}).get("ebookFile") is not None or
-                    (book.get("media", {}).get("ebookFormat") is not None and book.get("media", {}).get("ebookFormat")))
+                    (
+                        book.get("media", {}).get("ebookFormat") is not None
+                        and book.get("media", {}).get("ebookFormat")
+                    ))
             ]
 
             # Get the book count for the entry content
@@ -370,7 +378,12 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                     "title": {"_text": collection_name},
                     "id": {"_text": collection_id},
                     "updated": {"_text": self.get_current_timestamp()},
-                    "content": {"_text": f"Collection with {book_count} ebook{'s' if book_count != 1 else ''}"},
+                    "content": {
+                        "_text": (
+                            f"Collection with {book_count} "
+                            f"ebook{'s' if book_count != 1 else ''}"
+                        )
+                    },
                     "link": [
                         {
                             "_attrs": {
@@ -442,14 +455,23 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                 collection_id = collection.get("id", "")
                 if collection_id:
                     try:
-                        collection_data = await fetch_from_api(f"/collections/{collection_id}", username=username, token=token)
+                        collection_data = await fetch_from_api(
+                            f"/collections/{collection_id}",
+                            username=username,
+                            token=token,
+                        )
 
                         # Check if there are ebooks in this collection and count them
                         ebook_count = 0
                         for book in collection_data.get("books", []):
                             media = book.get("media", {})
-                            if (media.get("ebookFile") is not None or
-                                    (media.get("ebookFormat") is not None and media.get("ebookFormat"))):
+                            if (
+                                    media.get("ebookFile") is not None
+                                    or (
+                                        media.get("ebookFormat") is not None
+                                        and media.get("ebookFormat")
+                                    )
+                            ):
                                 ebook_count += 1
 
                         if ebook_count > 0:
