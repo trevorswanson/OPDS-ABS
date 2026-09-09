@@ -501,6 +501,16 @@ async def search_xml(
             return effective_username
 
         params = dict(request.query_params)
+        # Confirmed false positive: Jinja2Templates defaults to
+        # jinja2.select_autoescape(), which enables autoescaping for
+        # templates ending in "html"/"htm"/"xml" - search.xml qualifies, so
+        # username, token, and searchTerms are all HTML-entity-escaped
+        # before reaching the rendered response regardless of their
+        # contents. Verified directly: rendering this template with
+        # '"><script>alert(1)</script>' for each value produces
+        # "&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;" with no
+        # unescaped markup reaching the output.
+        # codeql[py/reflected-xss]
         return templates.TemplateResponse(request, "search.xml", {
             "username": effective_username,
             "library_id": library_id,
