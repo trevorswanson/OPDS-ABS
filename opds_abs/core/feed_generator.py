@@ -1,5 +1,6 @@
 """Base class for generating OPDS feeds."""
 # Standard library imports
+import logging
 from base64 import b64encode
 from copy import deepcopy
 from datetime import datetime
@@ -11,6 +12,9 @@ from fastapi.responses import Response
 # Local application imports
 from opds_abs.utils import dict_to_xml
 from opds_abs.utils.error_utils import FeedGenerationError, log_error
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Mapping of ebook formats to correct MIME types for OPDS
 FORMAT_TO_MIMETYPE = {
@@ -198,9 +202,6 @@ class BaseFeedGenerator:
         Raises:
             FeedGenerationError: If there's an error adding the book to the feed.
         """
-        import logging
-        logger = logging.getLogger(__name__)
-
         try:
             book_id = book.get("id", "")
             media = book.get("media", {})

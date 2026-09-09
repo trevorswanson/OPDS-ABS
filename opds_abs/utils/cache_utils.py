@@ -220,6 +220,18 @@ def cache_set(key: str, data: Any) -> None:
         threading.Thread(target=save_cache_to_disk, daemon=True).start()
 
 
+def get_cache() -> Dict[str, Tuple[float, Any]]:
+    """Return the current in-memory cache dictionary instance.
+
+    Looked up fresh on each call so callers keep seeing the live cache
+    even after load_cache_from_disk() rebinds the module-level _cache.
+
+    Returns:
+        Dict[str, Tuple[float, Any]]: The cache mapping keys to (timestamp, data).
+    """
+    return _cache
+
+
 def clear_cache() -> int:
     """Clear all cached items from memory and disk.
 

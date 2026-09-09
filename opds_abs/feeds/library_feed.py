@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import copy
+import traceback
 
 # Third-party imports
 from fastapi.responses import RedirectResponse
@@ -287,7 +288,6 @@ class LibraryFeedGenerator(BaseFeedGenerator):
 
             except Exception as e:
                 logger.error("Error processing collection data: %s", e)
-                import traceback
                 traceback.print_exc()
 
         # If not filtering by collection or collection processing failed, continue with normal flow

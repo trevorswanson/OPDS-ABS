@@ -8,7 +8,11 @@ from opds_abs.core.feed_generator import BaseFeedGenerator
 from opds_abs.api.client import fetch_from_api, get_download_urls_from_item
 
 from opds_abs.utils import dict_to_xml
-from opds_abs.utils.cache_utils import get_cached_library_items, get_cached_series_details
+from opds_abs.utils.cache_utils import (
+    get_cached_library_items,
+    get_cached_series_details,
+    get_cached_series_items,
+)
 from opds_abs.utils.error_utils import log_error, handle_exception
 
 # Set up logging
@@ -270,8 +274,6 @@ class SeriesFeedGenerator(BaseFeedGenerator):
         Returns:
             Response: A FastAPI response object containing the XML feed.
         """
-        from opds_abs.utils.cache_utils import get_cached_series_items
-
         try:
             # Get series details for name and author (still useful for feed metadata)
             series_details = await get_cached_series_details(

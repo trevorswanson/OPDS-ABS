@@ -49,8 +49,15 @@ from contextlib import asynccontextmanager
 
 
 # Third-party imports
+import aiohttp
 from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.exception_handlers import http_exception_handler
@@ -68,7 +75,12 @@ from opds_abs.feeds.series_feed import SeriesFeedGenerator
 from opds_abs.feeds.collection_feed import CollectionFeedGenerator
 from opds_abs.feeds.author_feed import AuthorFeedGenerator
 from opds_abs.feeds.search_feed import SearchFeedGenerator
-from opds_abs.utils.cache_utils import clear_cache, load_cache_from_disk, save_cache_to_disk
+from opds_abs.utils.cache_utils import (
+    clear_cache,
+    get_cache,
+    load_cache_from_disk,
+    save_cache_to_disk,
+)
 from opds_abs.api.client import invalidate_cache
 from opds_abs.utils.auth_utils import get_authenticated_user, require_auth
 from opds_abs.utils.error_utils import (
@@ -958,8 +970,7 @@ async def get_cache_stats(_auth_info: tuple = Depends(require_auth)):
                       age information, and estimated size.
     """
     try:
-        # Import here to ensure we're using the same _cache instance
-        from opds_abs.utils.cache_utils import _cache as current_cache
+        current_cache = get_cache()
 
         now = time.time()
         stats = {
@@ -1045,8 +1056,6 @@ async def invalidate_specific_cache(
 
 async def _proxy_authenticated_image(url: str, token: str) -> Response:
     """Fetch an Audiobookshelf image using the authenticated OPDS token."""
-    import aiohttp
-
     headers = {"Authorization": f"Bearer {token}"}
     try:
         async with aiohttp.ClientSession() as session:
@@ -1125,9 +1134,6 @@ async def proxy_download(
     Returns:
         StreamingResponse: The file content stream
     """
-    from fastapi.responses import StreamingResponse
-    import aiohttp
-
     _username, token, _display_name = auth_info
 
     if not token:
