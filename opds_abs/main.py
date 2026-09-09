@@ -1155,68 +1155,13 @@ async def proxy_download(
     headers = {"Authorization": f"Bearer {token}"}
     logger.debug("Making authenticated request to %s", url)
 
-    async def stream_file():
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(url, headers=headers) as response:
-                    response.raise_for_status()
-                    logger.debug(
-                        "Received successful response from Audiobookshelf API "
-                        "with status %s",
-                        response.status,
-                    )
-
-                    # Stream the response content
-                    async for chunk in response.content.iter_any():
-                        yield chunk
-
-            except aiohttp.ClientResponseError as e:
-                logger.error("Error proxying download: %s - %s", e.status, str(e))
-                # Re-raise as HTTPException with appropriate status
-                raise HTTPException(
-                    status_code=e.status, detail=f"Error fetching file: {str(e)}") from e
-            except Exception as e:
-                logger.error("Unexpected error proxying download: %s", str(e))
-                raise HTTPException(
-                    status_code=500, detail=f"Error downloading file: {str(e)}") from e
-
     try:
         # Make a HEAD request first to get content headers without downloading the file
-        response_headers = {}
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.head(url, headers=headers) as head_response:
-                    head_response.raise_for_status()
-
-                    # Get content type for proper MIME type handling
-                    content_type = head_response.headers.get(
-                        "Content-Type", "application/octet-stream")
-
-                    # Set the same headers we received from Audiobookshelf
-                    for header_name, header_value in head_response.headers.items():
-                        if header_name.lower() in (
-                                "content-type", "content-disposition", "content-length"):
-                            response_headers[header_name] = header_value
-
-                    logger.debug("Proxying download with content type: %s", content_type)
-
-                    # Make sure we have a content-disposition header for proper filename
-                    if "content-disposition" not in {
-                            k.lower(): v for k, v in response_headers.items()}:
-                        filename = f"book-{item_id}.epub"
-                        response_headers["Content-Disposition"] = (
-                            f'attachment; filename="{filename}"'
-                        )
-
-            except Exception as e:
-                logger.warning("Error making HEAD request, continuing without headers: %s", str(e))
-                # If HEAD request fails, we'll continue without the headers
-                content_type = "application/octet-stream"
-                response_headers = {}
+        content_type, response_headers = await _fetch_download_head_info(url, headers, item_id)
 
         # Return a streaming response with the file content and appropriate headers
         return StreamingResponse(
-            stream_file(),
+            _stream_download_file(url, headers),
             media_type=content_type,
             headers=response_headers
         )
@@ -1225,3 +1170,87 @@ async def proxy_download(
         logger.error("Error setting up download proxy: %s", str(e))
         raise HTTPException(
             status_code=500, detail=f"Failed to set up download: {str(e)}") from e
+
+
+async def _stream_download_file(url, headers):
+    """Stream a file's content from Audiobookshelf, translating errors to HTTPException.
+
+    Args:
+        url: The Audiobookshelf download URL.
+        headers: Request headers (including the Bearer auth token).
+
+    Yields:
+        bytes: Chunks of the file's content.
+
+    Raises:
+        HTTPException: If the upstream request fails.
+    """
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                logger.debug(
+                    "Received successful response from Audiobookshelf API "
+                    "with status %s",
+                    response.status,
+                )
+
+                # Stream the response content
+                async for chunk in response.content.iter_any():
+                    yield chunk
+
+        except aiohttp.ClientResponseError as e:
+            logger.error("Error proxying download: %s - %s", e.status, str(e))
+            # Re-raise as HTTPException with appropriate status
+            raise HTTPException(
+                status_code=e.status, detail=f"Error fetching file: {str(e)}") from e
+        except Exception as e:
+            logger.error("Unexpected error proxying download: %s", str(e))
+            raise HTTPException(
+                status_code=500, detail=f"Error downloading file: {str(e)}") from e
+
+
+async def _fetch_download_head_info(url, headers, item_id):
+    """HEAD the download URL to get its content type and forwardable headers.
+
+    Args:
+        url: The Audiobookshelf download URL.
+        headers: Request headers (including the Bearer auth token).
+        item_id: The item's ID (used only to build a fallback filename).
+
+    Returns:
+        tuple: (content_type, response_headers) - falls back to a generic
+            content type and empty headers if the HEAD request fails.
+    """
+    response_headers = {}
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.head(url, headers=headers) as head_response:
+                head_response.raise_for_status()
+
+                # Get content type for proper MIME type handling
+                content_type = head_response.headers.get(
+                    "Content-Type", "application/octet-stream")
+
+                # Set the same headers we received from Audiobookshelf
+                for header_name, header_value in head_response.headers.items():
+                    if header_name.lower() in (
+                            "content-type", "content-disposition", "content-length"):
+                        response_headers[header_name] = header_value
+
+                logger.debug("Proxying download with content type: %s", content_type)
+
+                # Make sure we have a content-disposition header for proper filename
+                if "content-disposition" not in {
+                        k.lower(): v for k, v in response_headers.items()}:
+                    filename = f"book-{item_id}.epub"
+                    response_headers["Content-Disposition"] = (
+                        f'attachment; filename="{filename}"'
+                    )
+
+                return content_type, response_headers
+
+        except Exception as e:
+            logger.warning("Error making HEAD request, continuing without headers: %s", str(e))
+            # If HEAD request fails, we'll continue without the headers
+            return "application/octet-stream", {}
