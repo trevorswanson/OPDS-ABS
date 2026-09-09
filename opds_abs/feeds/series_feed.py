@@ -200,7 +200,10 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             # If no matching items were found in the cache, try the fallback method
             if not filtered_items:
                 logger.warning(
-                    "No matching items found in cache for series %s. Trying API fallback.", series_name)
+                    (
+                        "No matching items found in cache for series %s. "
+                        "Trying API fallback."
+                    ), series_name)
                 params = {"filter": f"series.{self.create_filter(series_id)}"}
                 data = await fetch_from_api(
                         f"/libraries/{library_id}/items",
@@ -493,7 +496,12 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             Response: A FastAPI response object containing the XML feed.
         """
         series_params = {"limit": 2000, "sort": "name"}
-        data = await fetch_from_api(f"/libraries/{library_id}/series", series_params, username=username, token=token)
+        data = await fetch_from_api(
+            f"/libraries/{library_id}/series",
+            series_params,
+            username=username,
+            token=token,
+        )
 
         feed = self.create_base_feed(username, library_id, token=token)
 
