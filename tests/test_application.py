@@ -146,7 +146,9 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cached_token_is_returned_without_authentication_call(self):
         auth_utils.TOKEN_CACHE["alice"] = ("token", "Alice")
-        with patch.object(auth_utils, "authenticate_with_audiobookshelf", new_callable=AsyncMock) as authenticate:
+        with patch.object(
+                auth_utils, "authenticate_with_audiobookshelf",
+                new_callable=AsyncMock) as authenticate:
             result = await auth_utils.get_user_token("alice", "ignored")
         self.assertEqual(result, ("token", "Alice"))
         authenticate.assert_not_awaited()
@@ -157,10 +159,14 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_authentication_disabled_skips_request_verification(self):
         with patch.object(auth_utils, "AUTH_ENABLED", False):
-            self.assertEqual(await auth_utils.verify_credentials(make_request()), (None, None, None))
+            self.assertEqual(
+                await auth_utils.verify_credentials(make_request()),
+                (None, None, None))
 
     async def test_require_auth_rejects_missing_credentials(self):
-        with patch.object(auth_utils, "get_authenticated_user", new=AsyncMock(return_value=(None, None, None))):
+        with patch.object(
+                auth_utils, "get_authenticated_user",
+                new=AsyncMock(return_value=(None, None, None))):
             with self.assertRaises(HTTPException) as raised:
                 await auth_utils.require_auth(make_request())
         self.assertEqual(raised.exception.status_code, 401)
@@ -207,8 +213,11 @@ class ApiClientTests(unittest.IsolatedAsyncioTestCase):
                 self.calls.append((url, kwargs))
                 return Response()
 
-        with patch.object(api_client.aiohttp, "ClientSession", Session), patch.object(api_client, "AUTH_ENABLED", True):
-            result = await api_client.fetch_from_api("/items/1", {"token": "secret"}, username="alice", bypass_cache=True)
+        with patch.object(api_client.aiohttp, "ClientSession", Session), \
+                patch.object(api_client, "AUTH_ENABLED", True):
+            result = await api_client.fetch_from_api(
+                "/items/1", {"token": "secret"},
+                username="alice", bypass_cache=True)
         self.assertEqual(result, {"results": [1]})
         cached = api_client.cache_get(api_client._create_cache_key("/items/1", {}, "alice"))
         self.assertEqual(cached, {"results": [1]})
@@ -274,7 +283,8 @@ class FeedAndRouteTests(unittest.IsolatedAsyncioTestCase):
     """Verify specialized feed output and representative HTTP route behavior."""
 
     async def test_navigation_feed_contains_all_navigation_entries(self):
-        response = await NavigationFeedGenerator().generate_navigation_feed("alice", "lib", token="token")
+        response = await NavigationFeedGenerator().generate_navigation_feed(
+            "alice", "lib", token="token")
         body = response.body.decode()
         self.assertEqual(response.media_type, "application/atom+xml")
         self.assertIn("Navigation", body)
@@ -283,7 +293,9 @@ class FeedAndRouteTests(unittest.IsolatedAsyncioTestCase):
     def test_proxy_route_requires_authentication(self):
         from opds_abs import main
 
-        with patch.object(main, "get_authenticated_user", new=AsyncMock(return_value=(None, None, None))):
+        with patch.object(
+                main, "get_authenticated_user",
+                new=AsyncMock(return_value=(None, None, None))):
             main.app.dependency_overrides[main.get_authenticated_user] = lambda: (None, None, None)
             try:
                 with TestClient(main.app) as test_client:
@@ -383,7 +395,9 @@ class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
     async def test_library_root_redirects_for_single_library(self):
         from opds_abs.feeds.library_feed import LibraryFeedGenerator
 
-        with patch("opds_abs.feeds.library_feed.fetch_from_api", new=AsyncMock(return_value={"libraries": [{"id": "lib-1"}]})):
+        with patch(
+                "opds_abs.feeds.library_feed.fetch_from_api",
+                new=AsyncMock(return_value={"libraries": [{"id": "lib-1"}]})):
             response = await LibraryFeedGenerator().generate_root_feed("alice", token="token")
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["location"], "/opds/alice/libraries/lib-1")

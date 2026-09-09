@@ -266,8 +266,10 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             # Use handle_exception to return a standardized error response
             return handle_exception(e, context=context)
 
-    def _add_pagination_links_for_author(self, feed, username: str, library_id: str, author_id: str,
-                                         current_page: int, total_pages: int, token: Optional[str] = None):
+    def _add_pagination_links_for_author(
+            self, feed, username: str, library_id: str, author_id: str,
+            current_page: int, total_pages: int,
+            token: Optional[str] = None):
         """Add pagination links to the author items feed.
 
         Args:
@@ -330,7 +332,9 @@ class AuthorFeedGenerator(BaseFeedGenerator):
         for link in links:
             dict_to_xml(feed, {"link": link})
 
-    def add_author_to_feed(self, username: str, library_id: str, feed, author: Dict[str, Any], token: Optional[str] = None):
+    def add_author_to_feed(
+            self, username: str, library_id: str, feed, author: Dict[str, Any],
+            token: Optional[str] = None):
         """Add an author entry to the OPDS feed.
 
         Args:
@@ -369,7 +373,12 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                     "title": {"_text": author_name or "Unknown author name"},
                     "id": {"_text": author_id or "unknown_id"},
                     "updated": {"_text": self.get_current_timestamp()},
-                    "content": {"_text": f"Author with {book_count} ebook{'s' if book_count != 1 else ''}"},
+                    "content": {
+                        "_text": (
+                            f"Author with {book_count} "
+                            f"ebook{'s' if book_count != 1 else ''}"
+                        )
+                    },
                     "link": [
                         {
                             "_attrs": {
