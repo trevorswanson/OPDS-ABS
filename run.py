@@ -7,8 +7,10 @@ based on the configured log level.
 The server runs on all network interfaces (0.0.0.0) on port 8000 with
 hot reload disabled by default for production/container startup.
 """
-import uvicorn
 import logging
+
+import uvicorn
+
 from opds_abs.config import (
     LOG_LEVEL,
     AUDIOBOOKSHELF_INTERNAL_URL,
@@ -21,14 +23,15 @@ from opds_abs.config import (
 logging.basicConfig(level=getattr(logging, LOG_LEVEL))
 logger = logging.getLogger("opds_abs")
 
+
 def run_server():
     """Start the Uvicorn server with the configured reload policy."""
     # Log URL configurations
     logger.info("-" * 50)
     logger.info("Starting OPDS-ABS server with the following configuration:")
-    logger.info(f"AUDIOBOOKSHELF_INTERNAL_URL: {AUDIOBOOKSHELF_INTERNAL_URL}")
-    logger.info(f"AUDIOBOOKSHELF_EXTERNAL_URL: {AUDIOBOOKSHELF_EXTERNAL_URL}")
-    logger.info(f"AUDIOBOOKSHELF_API: {AUDIOBOOKSHELF_API}")
+    logger.info("AUDIOBOOKSHELF_INTERNAL_URL: %s", AUDIOBOOKSHELF_INTERNAL_URL)
+    logger.info("AUDIOBOOKSHELF_EXTERNAL_URL: %s", AUDIOBOOKSHELF_EXTERNAL_URL)
+    logger.info("AUDIOBOOKSHELF_API: %s", AUDIOBOOKSHELF_API)
     logger.info("-" * 50)
 
     # Use the configured log level, converted to lowercase for Uvicorn
