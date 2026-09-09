@@ -124,6 +124,8 @@ Basic authentication challenge.
 
 GitHub Actions workflows live in `.github/workflows/`:
 
+- `quality.yml` runs regression tests, Python compilation, pre-commit, Compose
+  validation, and a Docker build on `dev`/`master` pushes and pull requests.
 - `docstring-check.yml` runs documentation checks for Python changes.
 - `docker-image-dev.yml` builds and publishes the `dev` image as
   `ghcr.io/trevorswanson/opds-abs:dev-<short-sha>`.
@@ -131,6 +133,12 @@ GitHub Actions workflows live in `.github/workflows/`:
   with the same trigger and output tag.
 - `docker-image.yml` builds and publishes `ghcr.io/trevorswanson/opds-abs:latest`
   from `master`.
+
+Flake8 and Pylint are development dependencies but are not required CI gates
+yet. The inherited codebase has a large existing warning/error baseline, and
+the current Pylint configuration contains an option unsupported by newer
+Pylint releases. Tightening either tool should be a separate cleanup with a
+baseline or incremental rollout, not an accidental all-at-once refactor.
 
 Workflows use GitHub's job-scoped `GITHUB_TOKEN` with `packages: write`; do not
 introduce a personal access token unless the GitHub Actions design genuinely

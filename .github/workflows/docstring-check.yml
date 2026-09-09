@@ -6,7 +6,7 @@ on:
     paths:
       - '**.py'
   pull_request:
-    branches: [ 'main', 'dev' ]
+    branches: [ 'master', 'dev' ]
     paths:
       - '**.py'
   workflow_dispatch:  # Allows manual triggering
@@ -20,7 +20,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
