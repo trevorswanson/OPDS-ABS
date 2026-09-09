@@ -17,7 +17,17 @@ extend-exclude = [
 select = ["E", "F", "W", "D"]
 ignore = [
     "E203",  # whitespace before ':' - conflicts with black-style slicing
+    "E226",  # missing whitespace around arithmetic operator - pycodestyle default-ignore
+    "E241",  # multiple spaces after comma - pycodestyle default-ignore
+    "E242",  # tab after comma - pycodestyle default-ignore
 ]
+
+# Several pycodestyle E3xx (blank-lines) checks are still preview-only in
+# Ruff's stable rule set. flake8 enforced them, so enable preview to keep
+# parity - the ignores above restore flake8's own default-ignore list
+# (E121/E123/E126/E704/W503/W504 aren't implemented by Ruff at all, so
+# there's nothing to re-ignore for those).
+preview = true
 
 [lint.pydocstyle]
 convention = "google"

@@ -123,13 +123,13 @@ class NavigationFeedGenerator(BaseFeedGenerator):
 
                 # Add authentication token to nav_params if available
                 if token and nav_params:
-                    nav_href = f"{base_path}{nav.get('path','')}?{nav_params}&token={token}"
+                    nav_href = f"{base_path}{nav.get('path', '')}?{nav_params}&token={token}"
                 elif token:
-                    nav_href = f"{base_path}{nav.get('path','')}?token={token}"
+                    nav_href = f"{base_path}{nav.get('path', '')}?token={token}"
                 elif nav_params:
-                    nav_href = f"{base_path}{nav.get('path','')}?{nav_params}"
+                    nav_href = f"{base_path}{nav.get('path', '')}?{nav_params}"
                 else:
-                    nav_href = f"{base_path}{nav.get('path','')}"
+                    nav_href = f"{base_path}{nav.get('path', '')}"
 
                 # Create entry data structure
                 entry_data = {

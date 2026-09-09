@@ -7,7 +7,11 @@ from typing import Dict, Any, List, Optional
 from opds_abs.core.feed_generator import BaseFeedGenerator
 from opds_abs.api.client import fetch_from_api
 from opds_abs.utils import dict_to_xml
-from opds_abs.utils.cache_utils import get_cached_library_items, get_cached_author_details, has_ebook
+from opds_abs.utils.cache_utils import (
+    get_cached_library_items,
+    get_cached_author_details,
+    has_ebook,
+)
 from opds_abs.utils.error_utils import (
     FeedGenerationError,
     ResourceNotFoundError,

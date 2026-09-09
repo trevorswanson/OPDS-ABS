@@ -99,6 +99,7 @@ class BaseFeedGenerator:
             username (str, optional): Username for personalized feed. Defaults to None.
             library_id (str, optional): Library ID to associate with the feed. Defaults to None.
             current_path (str, optional): Current path for pagination links. Defaults to None.
+            token (str, optional): Authentication token for the start link. Defaults to None.
 
         Returns:
             Element: An lxml Element object representing the base feed structure.

@@ -215,6 +215,7 @@ async def lifespan(_app: FastAPI):
         logger.info("Saving cache to disk...")
         save_cache_to_disk()
 
+
 # Create FastAPI app
 app = FastAPI(
     title="OPDS-ABS",
@@ -249,6 +250,7 @@ async def opds_exception_handler(request: Request, exc: OPDSBaseException):
     """
     context = f"{request.method} {request.url.path}"
     return handle_exception(exc, context=context)
+
 
 def _extract_username_library_from_path(path: str) -> tuple:
     """Pull the username and library_id path segments out of an OPDS route.
