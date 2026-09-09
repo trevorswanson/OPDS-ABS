@@ -419,26 +419,20 @@ class SeriesFeedGenerator(BaseFeedGenerator):
 
         return filtered_results
 
-    async def add_series_to_feed(self, username, library_id, feed, series, token=None):
-        """Add a series to the feed.
+    async def _resolve_series_author_name(self, username, library_id, first_book_id,
+                                          first_book_metadata, token):
+        """Resolve the author name to display for a series, with fallbacks.
 
         Args:
             username (str): The username requesting the feed.
             library_id (str): The ID of the library that contains the series.
-            feed (Element): The XML element to add the series to.
-            series (dict): Series information to add to the feed.
-            token (str, optional): Authentication token to include in links.
+            first_book_id (str, optional): The series' first book's ID, if any.
+            first_book_metadata (dict): The series' first book's metadata.
+            token (str, optional): Authentication token for Audiobookshelf.
+
+        Returns:
+            str: The resolved author name, or "Unknown Author" if none was found.
         """
-        first_book = series.get('books', [])[0] if series.get('books') else {}
-        first_book_id = first_book.get("id", None)
-        first_book_metadata = first_book.get('media', {}).get('metadata', {})
-        cover_url = f"/opds/proxy/cover/{first_book_id}" if first_book_id else ""
-
-        # Determine if this was called from search feed by checking if authorName is already set
-        # The search feed will directly set authorName, while series feed won't have this property
-        from_search_feed = series.get("authorName", None)
-
-        # Get author name with proper fallback chain
         raw_author_name = None
 
         # Check for the first book in library items if we have an ID
@@ -471,25 +465,66 @@ class SeriesFeedGenerator(BaseFeedGenerator):
         if not raw_author_name:
             raw_author_name = "Unknown Author"
 
+        return raw_author_name
+
+    async def add_series_to_feed(self, username, library_id, feed, series, token=None):
+        """Add a series to the feed.
+
+        Args:
+            username (str): The username requesting the feed.
+            library_id (str): The ID of the library that contains the series.
+            feed (Element): The XML element to add the series to.
+            series (dict): Series information to add to the feed.
+            token (str, optional): Authentication token to include in links.
+        """
+        first_book = series.get('books', [])[0] if series.get('books') else {}
+        first_book_id = first_book.get("id", None)
+        first_book_metadata = first_book.get('media', {}).get('metadata', {})
+        cover_url = f"/opds/proxy/cover/{first_book_id}" if first_book_id else ""
+
+        # Determine if this was called from search feed by checking if authorName is already set
+        # The search feed will directly set authorName, while series feed won't have this property
+        from_search_feed = series.get("authorName", None)
+
+        raw_author_name = await self._resolve_series_author_name(
+            username, library_id, first_book_id, first_book_metadata, token)
+
         content_text = raw_author_name
         # Format the content based on the source
         if from_search_feed:
             content_text = f"Series by {raw_author_name}"
             logger.debug("Adding series to feed from search: %s", content_text)
 
-        # Use the direct series route instead of query parameters
-        series_id = series.get('id')
-
         # Add token to the series link if provided
-        series_link = f"/opds/{username}/libraries/{library_id}/series/{series_id}"
+        series_link = f"/opds/{username}/libraries/{library_id}/series/{series.get('id')}"
         if token:
             series_link = f"{series_link}?token={token}"
 
         # Create entry data structure
-        entry_data = {
+        entry_data = self._build_series_entry_data(
+            series, series_link, cover_url, raw_author_name, content_text)
+
+        # Convert the dictionary to XML elements
+        dict_to_xml(feed, entry_data)
+
+    def _build_series_entry_data(self, series, series_link, cover_url,
+                                 raw_author_name, content_text):
+        """Build the OPDS entry dict for a series.
+
+        Args:
+            series (dict): Series information (used for name and id).
+            series_link (str): The link to the series' items feed.
+            cover_url (str): The cover image URL for the entry.
+            raw_author_name (str): The author name to display.
+            content_text (str): The entry's content text.
+
+        Returns:
+            dict: The entry data structure ready for dict_to_xml().
+        """
+        return {
             "entry": {
                 "title": {"_text": series.get("name", "Unknown series name")},
-                "id": {"_text": series_id},
+                "id": {"_text": series.get('id')},
                 "updated": {"_text": self.get_current_timestamp()},
                 "author": {
                     "name": {"_text": raw_author_name}
@@ -513,9 +548,6 @@ class SeriesFeedGenerator(BaseFeedGenerator):
                 ]
             }
         }
-
-        # Convert the dictionary to XML elements
-        dict_to_xml(feed, entry_data)
 
     async def generate_series_feed(self, username, library_id, token=None):
         """Display all series in the library.
