@@ -20,6 +20,7 @@ from opds_abs.utils.error_utils import (
 # Set up logging
 logger = logging.getLogger(__name__)
 
+
 class AuthorFeedGenerator(BaseFeedGenerator):
     """Generator for authors feed.
 
@@ -46,7 +47,8 @@ class AuthorFeedGenerator(BaseFeedGenerator):
         authors_with_ebooks = await self.get_authors_with_ebooks(username, library_id, token=token)
 
         # Create a lookup dictionary by ID for O(1) access instead of O(n) searching
-        authors_by_id = {author.get("id"): author for author in authors_with_ebooks if author.get("id")}
+        authors_by_id = {author.get(
+            "id"): author for author in authors_with_ebooks if author.get("id")}
 
         # Direct lookup by ID
         if author_id in authors_by_id:
@@ -75,7 +77,8 @@ class AuthorFeedGenerator(BaseFeedGenerator):
 
             if not author_name:
                 # Fall back to API call if we couldn't find the author name
-                logger.warning("Could not find author name for ID %s, falling back to API filter", author_id)
+                logger.warning(
+                    "Could not find author name for ID %s, falling back to API filter", author_id)
                 params = {"filter": f"authors.{self.create_filter(author_id)}"}
                 data = await fetch_from_api(
                         f"/libraries/{library_id}/items",
@@ -155,7 +158,8 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             )
 
             # Sort library items by name
-            library_items.sort(key=lambda item: item.get("media", {}).get("metadata", {}).get("title", "").lower())
+            library_items.sort(key=lambda item: item.get(
+                "media", {}).get("metadata", {}).get("title", "").lower())
 
             # Create the feed
             feed = self.create_base_feed(username, library_id, token=token)
@@ -195,7 +199,8 @@ class AuthorFeedGenerator(BaseFeedGenerator):
 
             # Apply pagination
             total_books = len(library_items)
-            total_pages = 1 if no_pagination else (total_books + per_page - 1) // per_page  # Ceiling division
+            total_pages = 1 if no_pagination else (
+                total_books + per_page - 1) // per_page  # Ceiling division
 
             # Adjust page number if out of bounds
             if page < 1:
@@ -216,14 +221,16 @@ class AuthorFeedGenerator(BaseFeedGenerator):
 
             # Add pagination links only if pagination is enabled
             if not no_pagination:
-                self._add_pagination_links_for_author(feed, username, library_id, author_id, page, total_pages, token)
+                self._add_pagination_links_for_author(
+                    feed, username, library_id, author_id, page, total_pages, token)
 
             # Get ebook files in optimal batch sizes to avoid overwhelming the server
             tasks = []
             for book in paged_items:
                 book_id = book.get("id", "")
                 if book_id:
-                    tasks.append(get_download_urls_from_item(book_id, username=username, token=token))
+                    tasks.append(get_download_urls_from_item(
+                        book_id, username=username, token=token))
 
             # Process in batches if we have a lot of books
             BATCH_SIZE = 5  # Adjust based on server capacity
@@ -416,7 +423,7 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                 raise ResourceNotFoundError("No authors with ebooks found")
 
             logger.debug("Found %d authors with ebooks in library %s",
-                       len(authors_list), library_id)
+                         len(authors_list), library_id)
             return authors_list
 
         except ResourceNotFoundError:
@@ -448,7 +455,7 @@ class AuthorFeedGenerator(BaseFeedGenerator):
         try:
             # Log the request
             logger.debug("Fetching authors feed for user %s library %s (page %d)",
-                       username, library_id, page)
+                         username, library_id, page)
 
             # Create the feed
             feed = self.create_base_feed(username, library_id, token=token)

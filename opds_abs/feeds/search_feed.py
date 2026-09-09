@@ -17,6 +17,7 @@ from opds_abs.utils.auth_utils import get_token_for_username
 # Set up logging
 logger = logging.getLogger(__name__)
 
+
 class SearchFeedGenerator(BaseFeedGenerator):
     """Generator for search feed.
 
@@ -147,7 +148,6 @@ class SearchFeedGenerator(BaseFeedGenerator):
 
         return self.create_response(feed)
 
-
     def _create_empty_search_feed(self, username, library_id, query):
         """Create an empty search feed when no query is provided.
 
@@ -182,7 +182,6 @@ class SearchFeedGenerator(BaseFeedGenerator):
             "title": {"_text": f"Search results for: {query}"}
         }
         dict_to_xml(feed, feed_data)
-
 
     async def _process_books(self, feed, search_data, username, library_id, token=None):
         """Process book search results and add them to the feed.
@@ -275,7 +274,8 @@ class SearchFeedGenerator(BaseFeedGenerator):
             return
 
         # Build map of series IDs to their most common author
-        series_author_map = self._build_series_author_map(cached_library_items, series_ids_with_ebooks)
+        series_author_map = self._build_series_author_map(
+            cached_library_items, series_ids_with_ebooks)
 
         # Add each series to the feed with author information
         series_generator = SeriesFeedGenerator()
@@ -367,7 +367,7 @@ class SearchFeedGenerator(BaseFeedGenerator):
         return series_author_map
 
     async def _add_series_to_feed(self, series, series_generator, series_author_map, cached_library_items,
-                                feed, username, library_id, token=None):
+                                  feed, username, library_id, token=None):
         """Add a single series to the feed with author information.
 
         Args:
@@ -469,13 +469,15 @@ class SearchFeedGenerator(BaseFeedGenerator):
             None. Author entries are added directly to the feed if they have ebooks.
         """
         # Extract author data from search results
-        search_author_names, author_data_by_name = self._extract_author_data_from_search(search_data)
+        search_author_names, author_data_by_name = self._extract_author_data_from_search(
+            search_data)
 
         if not search_author_names:
             return
 
         # Count ebooks per author using cached items
-        author_ebook_counts = self._count_ebooks_per_author(cached_library_items, search_author_names)
+        author_ebook_counts = self._count_ebooks_per_author(
+            cached_library_items, search_author_names)
 
         # Add each author that has books to the feed
         author_generator = AuthorFeedGenerator()
@@ -534,7 +536,7 @@ class SearchFeedGenerator(BaseFeedGenerator):
         return author_ebook_counts
 
     def _add_author_to_feed(self, author_generator, author_name, ebook_count, author_data_by_name,
-                           feed, username, library_id, token=None):
+                            feed, username, library_id, token=None):
         """Add a single author to the feed with ebook count information.
 
         Args:
