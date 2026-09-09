@@ -291,7 +291,7 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
                     display_name = actual_username
 
                     # If username was provided and doesn't match, log a warning.
-                    if username != "api_key_user" and username != actual_username:
+                    if username not in ("api_key_user", actual_username):
                         logger.warning("API key belongs to user '%s', not '%s'",
                                        actual_username, username)
 
@@ -393,7 +393,7 @@ def get_credentials_from_request(
 
         # Handle API Key Auth in the Authorization: Bearer <api_key> format
         # This is for API clients using the Audiobookshelf API directly
-        elif auth_type.lower() == "bearer":
+        if auth_type.lower() == "bearer":
             # Check if API key authentication is enabled
             if not API_KEY_AUTH_ENABLED:
                 logger.warning(
@@ -622,13 +622,12 @@ async def get_authenticated_user(
                 status_code=503,  # Service Unavailable
                 detail=error_message
             )
-        else:
-            # Regular authentication failure - return a 401 with WWW-Authenticate header
-            raise HTTPException(
-                status_code=401,
-                detail=str(e),
-                headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
-            )
+        # Regular authentication failure - return a 401 with WWW-Authenticate header
+        raise HTTPException(
+            status_code=401,
+            detail=str(e),
+            headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
+        ) from e
 
 
 async def require_auth(request: Request) -> Tuple[str, str, str]:

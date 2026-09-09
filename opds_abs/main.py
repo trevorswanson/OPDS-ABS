@@ -436,13 +436,12 @@ async def opds_root_redirect(
         if not AUTH_ENABLED:
             # Authentication is disabled, so use a default username
             return RedirectResponse(url="/opds/anonymous")
-        else:
-            # If not authenticated, return a 401 with WWW-Authenticate header
-            raise HTTPException(
-                status_code=401,
-                detail="Authentication required",
-                headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
-            )
+        # If not authenticated, return a 401 with WWW-Authenticate header
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
+        )
 
     # Redirect to the user's OPDS root
     return RedirectResponse(url=f"/opds/{display_name}")
