@@ -433,6 +433,84 @@ async def get_cached_series_details(
         return None
 
 
+def _count_authors_with_ebooks(library_items):
+    """Build a name -> ebook count map from library items that have an ebook.
+
+    Args:
+        library_items (list): Library items to scan.
+
+    Returns:
+        dict: Author name -> {"name", "ebook_count", "id": None, "imagePath": None}.
+    """
+    authors_with_ebooks = {}
+
+    # Optimize ebook detection with a single pass through the items
+    for item in library_items:
+        media = item.get("media", {})
+        metadata = media.get("metadata", {})
+
+        # Efficient ebook detection
+        has_ebook = (
+            media.get("ebookFile") is not None or
+            (media.get("ebookFormat") is not None and media.get("ebookFormat"))
+        )
+
+        if has_ebook:
+            # Get author name from metadata
+            author_name = metadata.get("authorName")
+            if author_name:
+                # Add or update author in our tracking dictionary
+                if author_name in authors_with_ebooks:
+                    authors_with_ebooks[author_name]["ebook_count"] += 1
+                else:
+                    authors_with_ebooks[author_name] = {
+                        "name": author_name,
+                        "ebook_count": 1,
+                        "id": None,  # Will be populated from author details
+                        "imagePath": None  # Will be populated from author details
+                    }
+
+    return authors_with_ebooks
+
+
+async def _enhance_authors_with_details(
+        fetch_func, library_id, username, token, authors_with_ebooks):
+    """Fill in id/imagePath for known authors using the full authors API.
+
+    Args:
+        fetch_func (callable): The function to fetch data from the API.
+        library_id (str): ID of the library to search in.
+        username (str): The username of the authenticated user.
+        token (str, optional): Authentication token for Audiobookshelf.
+        authors_with_ebooks (dict): Author name -> partial author info; updated in place.
+
+    Returns:
+        bool: True if author details were successfully retrieved and applied,
+            False if the API call failed to return usable data.
+    """
+    authors_params = {"limit": 2000, "sort": "name"}
+    author_data = await fetch_func(
+        f"/libraries/{library_id}/authors",
+        authors_params,
+        username=username,
+        token=token,
+    )
+
+    if not author_data or "authors" not in author_data:
+        logger.warning("Failed to retrieve full author details")
+        return False
+
+    # Enhance author information with details from the author endpoint
+    for author in author_data.get("authors", []):
+        author_name = author.get("name")
+        if author_name and author_name in authors_with_ebooks:
+            # Add ID and image path from author details
+            authors_with_ebooks[author_name]["id"] = author.get("id")
+            authors_with_ebooks[author_name]["imagePath"] = author.get("imagePath")
+
+    return True
+
+
 async def get_cached_author_details(
         fetch_func, filter_func, username, library_id,
         token=None, bypass_cache=False):
@@ -473,55 +551,15 @@ async def get_cached_author_details(
         return []
 
     # First collect basic author info from items
-    authors_with_ebooks = {}
-
-    # Optimize ebook detection with a single pass through the items
-    for item in library_items:
-        media = item.get("media", {})
-        metadata = media.get("metadata", {})
-
-        # Efficient ebook detection
-        has_ebook = (
-            media.get("ebookFile") is not None or
-            (media.get("ebookFormat") is not None and media.get("ebookFormat"))
-        )
-
-        if has_ebook:
-            # Get author name from metadata
-            author_name = metadata.get("authorName")
-            if author_name:
-                # Add or update author in our tracking dictionary
-                if author_name in authors_with_ebooks:
-                    authors_with_ebooks[author_name]["ebook_count"] += 1
-                else:
-                    authors_with_ebooks[author_name] = {
-                        "name": author_name,
-                        "ebook_count": 1,
-                        "id": None,  # Will be populated from author details
-                        "imagePath": None  # Will be populated from author details
-                    }
+    authors_with_ebooks = _count_authors_with_ebooks(library_items)
 
     # Now get full author details from the API
-    authors_params = {"limit": 2000, "sort": "name"}
-    author_data = await fetch_func(
-        f"/libraries/{library_id}/authors",
-        authors_params,
-        username=username,
-        token=token,
-    )
+    details_ok = await _enhance_authors_with_details(
+        fetch_func, library_id, username, token, authors_with_ebooks)
 
-    if not author_data or "authors" not in author_data:
-        logger.warning("Failed to retrieve full author details")
+    if not details_ok:
         # Just return what we have so far
         return list(authors_with_ebooks.values())
-
-    # Enhance author information with details from the author endpoint
-    for author in author_data.get("authors", []):
-        author_name = author.get("name")
-        if author_name and author_name in authors_with_ebooks:
-            # Add ID and image path from author details
-            authors_with_ebooks[author_name]["id"] = author.get("id")
-            authors_with_ebooks[author_name]["imagePath"] = author.get("imagePath")
 
     # Convert to list for the caller
     authors_list = list(authors_with_ebooks.values())
