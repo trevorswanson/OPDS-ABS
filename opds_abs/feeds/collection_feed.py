@@ -5,10 +5,9 @@ import asyncio
 
 # Local application imports
 from opds_abs.core.feed_generator import BaseFeedGenerator
-from opds_abs.api.client import fetch_from_api, get_download_urls_from_item
-from opds_abs.config import ITEMS_PER_PAGE, PAGINATION_ENABLED
+from opds_abs.api.client import fetch_from_api
 from opds_abs.utils import dict_to_xml
-from opds_abs.utils.cache_utils import get_cached_library_items
+from opds_abs.utils.cache_utils import get_cached_library_items, has_ebook
 from opds_abs.utils.error_utils import (
     FeedGenerationError,
     ResourceNotFoundError,
@@ -51,10 +50,11 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             )
             return collection_data
         except Exception as e:
-            logger.error("Error fetching collection details: %s", e)
+            log_error(e, context=f"Fetching collection details for {collection_id}")
             return None
 
-    async def filter_items_by_collection_id(self, username, library_id, collection_id, token=None):
+    async def filter_items_by_collection_id(
+            self, username, library_id, collection_id, token=None, collection_details=None):
         """Filter items by collection ID using cached items when possible.
 
         Args:
@@ -62,17 +62,20 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             library_id (str): ID of the library containing the items.
             collection_id (str): ID of the collection to filter by.
             token (str, optional): Authentication token for Audiobookshelf.
+            collection_details (dict, optional): Already-fetched details for
+                this collection_id, to avoid re-fetching it.
 
         Returns:
             list: Library items filtered by the specified collection ID.
         """
         try:
             # Get collection details to get the books in this collection
-            collection_details = await self.get_collection_details(
-                    username,
-                    collection_id,
-                    token=token
-            )
+            if collection_details is None:
+                collection_details = await self.get_collection_details(
+                        username,
+                        collection_id,
+                        token=token
+                )
 
             # If we can't get collection details, fall back to API call
             if not collection_details:
@@ -158,14 +161,15 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                 return self._no_collection_books_response(feed, collection_name)
 
             paged_items, page, total_pages, no_pagination = (
-                self._paginate_collection_items(collection_items, page, per_page))
+                self.paginate_page_items(collection_items, page, per_page))
 
             # Add pagination links only if pagination is enabled
             if not no_pagination:
-                self._add_pagination_links(feed, username, library_id,
-                                           collection_id, page, total_pages, token)
+                base_url = (
+                    f"/opds/{username}/libraries/{library_id}/collections/{collection_id}")
+                self.add_page_pagination_links(feed, base_url, page, total_pages, token)
 
-            await self._add_paged_books_to_feed(feed, paged_items, username, token)
+            await self.add_paged_books_to_feed(feed, paged_items, username, token)
 
             return self.create_response(feed)
 
@@ -198,12 +202,13 @@ class CollectionFeedGenerator(BaseFeedGenerator):
         )
         collection_name = collection_info.get("name", "Unknown Collection")
 
-        # Get items in the collection
+        # Get items in the collection (reuse the details we already fetched above)
         collection_items = await self.get_items_in_collection(
                 username,
                 library_id,
                 collection_id,
-                token=token
+                token=token,
+                collection_details=collection_info
         )
 
         # Create the feed
@@ -244,147 +249,6 @@ class CollectionFeedGenerator(BaseFeedGenerator):
         dict_to_xml(feed, error_data)
         return self.create_response(feed)
 
-    @staticmethod
-    def _paginate_collection_items(collection_items, page, per_page):
-        """Compute the paginated page of collection items to render.
-
-        Args:
-            collection_items (list): All ebook items in the collection.
-            page (int): The requested page number (1-indexed).
-            per_page (int, optional): Requested items per page; None uses config default.
-
-        Returns:
-            tuple: (paged_items, page, total_pages, no_pagination)
-        """
-        # Check if pagination is enabled
-        if not PAGINATION_ENABLED:
-            # Pagination is disabled, show all items
-            per_page = 0
-            no_pagination = True
-        else:
-            # Use items per page from config if not specified
-            per_page = ITEMS_PER_PAGE if per_page is None else per_page
-            # If per_page is 0, we'll show all items without pagination
-            no_pagination = per_page <= 0
-
-        # Apply pagination
-        total_books = len(collection_items)
-        total_pages = 1 if no_pagination else (
-            total_books + per_page - 1) // per_page  # Ceiling division
-
-        # Adjust page number if out of bounds
-        if page < 1:
-            page = 1
-        elif 0 < total_pages < page:
-            page = total_pages
-
-        if no_pagination:
-            # No pagination, show all items
-            paged_items = collection_items
-        else:
-            # Calculate start and end indices
-            start_idx = (page - 1) * per_page
-            end_idx = min(start_idx + per_page, total_books)
-
-            # Get the subset of books for this page
-            paged_items = collection_items[start_idx:end_idx]
-
-        return paged_items, page, total_pages, no_pagination
-
-    async def _add_paged_books_to_feed(self, feed, paged_items, username, token):
-        """Fetch ebook files in batches and add each paged book to the feed.
-
-        Args:
-            feed: The XML feed object to add book entries to.
-            paged_items (list): The page of books to add.
-            username (str): The username of the authenticated user.
-            token (str, optional): Authentication token for Audiobookshelf.
-        """
-        # Get ebook files in optimal batch sizes to avoid overwhelming the server
-        batch_size = 5  # Adjust based on server capacity
-        tasks = []
-
-        for book in paged_items:
-            book_id = book.get("id", "")
-            if book_id:
-                tasks.append(get_download_urls_from_item(
-                    book_id, username=username, token=token))
-
-        # Process in batches if we have a lot of books
-        for i in range(0, len(tasks), batch_size):
-            batch_tasks = tasks[i:i+batch_size]
-            batch_results = await asyncio.gather(*batch_tasks)
-
-            # Add each book from this batch to the feed
-            for j, ebook_info in enumerate(batch_results):
-                book_index = i + j
-                if book_index < len(paged_items):
-                    self.add_book_to_feed(feed, paged_items[book_index], ebook_info, "", token)
-
-    def _add_pagination_links(self, feed, username, library_id, collection_id,
-                              current_page, total_pages, token=None):
-        """Add pagination links to the feed.
-
-        Args:
-            feed: The XML feed object to add links to
-            username: The username for URLs
-            library_id: The library ID for URLs
-            collection_id: The collection ID for URLs
-            current_page: Current page number
-            total_pages: Total number of pages
-            token: Optional token to include in URLs
-        """
-        # Base URL for pagination
-        base_url = f"/opds/{username}/libraries/{library_id}/collections/{collection_id}"
-        token_param = f"&token={token}" if token else ""
-
-        # Add pagination links
-        links = []
-
-        # First page link
-        if current_page > 1:
-            links.append({
-                "_attrs": {
-                    "rel": "first",
-                    "href": f"{base_url}?page=1{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Previous page link
-        if current_page > 1:
-            links.append({
-                "_attrs": {
-                    "rel": "previous",
-                    "href": f"{base_url}?page={current_page-1}{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Next page link
-        if current_page < total_pages:
-            links.append({
-                "_attrs": {
-                    "rel": "next",
-                    "href": f"{base_url}?page={current_page+1}{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Last page link
-        if current_page < total_pages:
-            links.append({
-                "_attrs": {
-                    "rel": "last",
-                    "href": f"{base_url}?page={total_pages}{token_param}",
-                    "type": "application/atom+xml;profile=opds-catalog"
-                }
-            })
-
-        # Add links to feed
-        for link in links:
-            dict_to_xml(feed, {"link": link})
-
     def add_collection_to_feed(self, username, library_id, feed, collection, token=None):
         """Add a collection to the feed.
 
@@ -405,11 +269,7 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             # Use list comprehension for more efficient filtering of books with ebooks
             books_with_ebooks = [
                 book for book in collection.get("books", [])
-                if (book.get("media", {}).get("ebookFile") is not None or
-                    (
-                        book.get("media", {}).get("ebookFormat") is not None
-                        and book.get("media", {}).get("ebookFormat")
-                    ))
+                if has_ebook(book.get("media", {}))
             ]
 
             # Get the book count for the entry content
@@ -584,16 +444,51 @@ class CollectionFeedGenerator(BaseFeedGenerator):
         """
         ebook_count = 0
         for book in collection_data.get("books", []):
-            media = book.get("media", {})
-            if (
-                    media.get("ebookFile") is not None
-                    or (
-                        media.get("ebookFormat") is not None
-                        and media.get("ebookFormat")
-                    )
-            ):
+            if has_ebook(book.get("media", {})):
                 ebook_count += 1
         return ebook_count
+
+    async def _fetch_collection_if_has_ebooks(self, username, collection, token, errors):
+        """Fetch one collection's books, returning it only if it has an ebook.
+
+        Args:
+            username (str): The username requesting the feed.
+            collection (dict): One raw collection entry from get_collections().
+            token (str, optional): Authentication token for Audiobookshelf.
+            errors (list): Shared list to append a human-readable error string to
+                if the collection couldn't be fetched.
+
+        Returns:
+            dict or None: The full collection data (with books) if it has at
+                least one ebook, else None.
+        """
+        collection_id = collection.get("id", "")
+        if not collection_id:
+            return None
+
+        try:
+            collection_data = await fetch_from_api(
+                f"/collections/{collection_id}",
+                username=username,
+                token=token,
+            )
+
+            ebook_count = self._count_collection_ebooks(collection_data)
+            if ebook_count > 0:
+                logger.debug("Collection \"%s\" has %d ebooks",
+                             collection_data.get('name'), ebook_count)
+                return collection_data
+            return None
+        except ResourceNotFoundError as e:
+            context = f"Fetching collection {collection_id}"
+            log_error(e, context=context, log_traceback=False)
+            errors.append(f"Collection {collection.get('name', collection_id)}: {str(e)}")
+            return None
+        except Exception as e:
+            context = f"Fetching collection {collection_id}"
+            log_error(e, context=context)
+            errors.append(f"Collection {collection.get('name', collection_id)}: {str(e)}")
+            return None
 
     async def _get_collections_with_ebooks(self, username, collections, token):
         """Fetch each collection's books and keep only those containing an ebook.
@@ -609,41 +504,17 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                 sorted by name, and a list of human-readable error strings for
                 collections that could not be fetched.
         """
-        filtered_collections = []
         collection_errors = []
 
-        for collection in collections:
-            # We need to fetch each collection's books separately
-            collection_id = collection.get("id", "")
-            if not collection_id:
-                continue
+        # Fetch every collection's books concurrently rather than one at a time.
+        results = await asyncio.gather(*(
+            self._fetch_collection_if_has_ebooks(username, collection, token, collection_errors)
+            for collection in collections
+        ))
 
-            try:
-                collection_data = await fetch_from_api(
-                    f"/collections/{collection_id}",
-                    username=username,
-                    token=token,
-                )
-
-                ebook_count = self._count_collection_ebooks(collection_data)
-                if ebook_count > 0:
-                    logger.debug("Collection \"%s\" has %d ebooks",
-                                 collection_data.get('name'), ebook_count)
-                    filtered_collections.append(collection_data)
-            except ResourceNotFoundError as e:
-                context = f"Fetching collection {collection_id}"
-                log_error(e, context=context, log_traceback=False)
-                collection_errors.append(
-                    f"Collection {collection.get('name', collection_id)}: {str(e)}")
-            except Exception as e:
-                context = f"Fetching collection {collection_id}"
-                log_error(e, context=context)
-                collection_errors.append(
-                    f"Collection {collection.get('name', collection_id)}: {str(e)}")
-
-        # Sort collections by name
         filtered_collections = sorted(
-            filtered_collections, key=lambda x: x.get("name", "").lower())
+            (result for result in results if result),
+            key=lambda x: x.get("name", "").lower())
 
         return filtered_collections, collection_errors
 
@@ -687,7 +558,8 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                     f"Collections not found for library {library_id}") from e
             raise
 
-    async def get_items_in_collection(self, username, library_id, collection_id, token=None):
+    async def get_items_in_collection(
+            self, username, library_id, collection_id, token=None, collection_details=None):
         """Get items in a specific collection with ebooks.
 
         Args:
@@ -695,6 +567,8 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             library_id (str): ID of the library containing the collection.
             collection_id (str): ID of the collection to get items from.
             token (str, optional): Authentication token for Audiobookshelf.
+            collection_details (dict, optional): Already-fetched details for
+                this collection_id, to avoid re-fetching it.
 
         Returns:
             list: Items in the collection that have ebooks.
@@ -704,5 +578,6 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             username,
             library_id,
             collection_id,
-            token=token
+            token=token,
+            collection_details=collection_details
         )

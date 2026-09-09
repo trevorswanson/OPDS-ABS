@@ -16,9 +16,6 @@ if _abs_url:
     # Legacy: use AUDIOBOOKSHELF_URL for both.
     AUDIOBOOKSHELF_INTERNAL_URL = _abs_url
     AUDIOBOOKSHELF_EXTERNAL_URL = _abs_url
-elif _abs_internal and not _abs_external:
-    AUDIOBOOKSHELF_INTERNAL_URL = _abs_internal
-    AUDIOBOOKSHELF_EXTERNAL_URL = _abs_internal
 elif _abs_external and not _abs_internal:
     AUDIOBOOKSHELF_INTERNAL_URL = _abs_external
     AUDIOBOOKSHELF_EXTERNAL_URL = _abs_external

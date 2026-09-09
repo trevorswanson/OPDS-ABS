@@ -1,15 +1,19 @@
 """Base class for generating OPDS feeds."""
 # Standard library imports
+import asyncio
 import logging
 from base64 import b64encode
 from copy import deepcopy
 from datetime import datetime
+from typing import Optional
 
 # Third-party imports
 from lxml import etree
 from fastapi.responses import Response
 
 # Local application imports
+from opds_abs.api.client import get_download_urls_from_item
+from opds_abs.config import ITEMS_PER_PAGE, PAGINATION_ENABLED
 from opds_abs.utils import dict_to_xml
 from opds_abs.utils.error_utils import FeedGenerationError, log_error
 
@@ -602,6 +606,130 @@ class BaseFeedGenerator:
         end_idx = start_idx + items_per_page
 
         return items[start_idx:end_idx]
+
+    @staticmethod
+    def paginate_page_items(items, page, per_page):
+        """Compute the paginated page of items to render (page-number based).
+
+        Used by feeds that expose first/previous/next/last page links (as
+        opposed to add_pagination_links()'s OpenSearch start_index style).
+
+        Args:
+            items (list): All items to paginate, already filtered/sorted.
+            page (int): The requested page number (1-indexed).
+            per_page (int, optional): Requested items per page; None uses config default.
+
+        Returns:
+            tuple: (paged_items, page, total_pages, no_pagination)
+        """
+        if not PAGINATION_ENABLED:
+            # Pagination is disabled, show all items
+            per_page = 0
+            no_pagination = True
+        else:
+            # Use items per page from config if not specified
+            per_page = ITEMS_PER_PAGE if per_page is None else per_page
+            # If per_page is 0, we'll show all items without pagination
+            no_pagination = per_page <= 0
+
+        total_items = len(items)
+        total_pages = 1 if no_pagination else (
+            total_items + per_page - 1) // per_page  # Ceiling division
+
+        # Adjust page number if out of bounds
+        if page < 1:
+            page = 1
+        elif 0 < total_pages < page:
+            page = total_pages
+
+        if no_pagination:
+            paged_items = items
+        else:
+            start_idx = (page - 1) * per_page
+            end_idx = min(start_idx + per_page, total_items)
+            paged_items = items[start_idx:end_idx]
+
+        return paged_items, page, total_pages, no_pagination
+
+    def add_page_pagination_links(
+            self, feed, base_url: str, current_page: int, total_pages: int,
+            token: Optional[str] = None):
+        """Add first/previous/next/last page-number pagination links to the feed.
+
+        Args:
+            feed: The XML feed object to add links to.
+            base_url (str): The feed's URL, without a "?page=" query string.
+            current_page (int): Current page number (1-based).
+            total_pages (int): Total number of pages.
+            token (str, optional): Token to include in the link URLs.
+        """
+        token_param = f"&token={token}" if token else ""
+        links = []
+
+        if current_page > 1:
+            links.append({
+                "_attrs": {
+                    "rel": "first",
+                    "href": f"{base_url}?page=1{token_param}",
+                    "type": "application/atom+xml;profile=opds-catalog"
+                }
+            })
+            links.append({
+                "_attrs": {
+                    "rel": "previous",
+                    "href": f"{base_url}?page={current_page-1}{token_param}",
+                    "type": "application/atom+xml;profile=opds-catalog"
+                }
+            })
+
+        if current_page < total_pages:
+            links.append({
+                "_attrs": {
+                    "rel": "next",
+                    "href": f"{base_url}?page={current_page+1}{token_param}",
+                    "type": "application/atom+xml;profile=opds-catalog"
+                }
+            })
+            links.append({
+                "_attrs": {
+                    "rel": "last",
+                    "href": f"{base_url}?page={total_pages}{token_param}",
+                    "type": "application/atom+xml;profile=opds-catalog"
+                }
+            })
+
+        for link in links:
+            dict_to_xml(feed, {"link": link})
+
+    async def add_paged_books_to_feed(self, feed, paged_items, username, token):
+        """Fetch ebook files in batches and add each paged book to the feed.
+
+        Args:
+            feed: The XML feed object to add book entries to.
+            paged_items (list): The page of books to add.
+            username (str): The username of the authenticated user.
+            token (str, optional): Authentication token for Audiobookshelf.
+        """
+        # Get ebook files in optimal batch sizes to avoid overwhelming the server
+        batch_size = 5  # Adjust based on server capacity
+        tasks = []
+
+        for book in paged_items:
+            book_id = book.get("id", "")
+            if book_id:
+                tasks.append(get_download_urls_from_item(
+                    book_id, username=username, token=token))
+
+        # Process in batches if we have a lot of books
+        for i in range(0, len(tasks), batch_size):
+            batch_tasks = tasks[i:i+batch_size]
+            batch_results = await asyncio.gather(*batch_tasks)
+
+            # Add each book from this batch to the feed
+            for j, ebook_info in enumerate(batch_results):
+                book_index = i + j
+                if book_index < len(paged_items):
+                    self.add_book_to_feed(feed, paged_items[book_index], ebook_info, "", token)
 
     def get_current_timestamp(self):
         """Get the current timestamp in ISO 8601 format.

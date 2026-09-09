@@ -108,7 +108,7 @@ class GenerateAuthorItemsFeedTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(
                     return_value=("Herbert", items, generator.create_base_feed()))), \
              patch(
-                "opds_abs.feeds.author_feed.get_download_urls_from_item",
+                "opds_abs.core.feed_generator.get_download_urls_from_item",
                 new=AsyncMock(return_value=[])):
             response = await generator.generate_author_items_feed(
                 "alice", "lib-1", "a1", page=1, per_page=1)
@@ -193,7 +193,7 @@ class PrepareAuthorFeedIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 generator, "filter_items_by_author_id",
                 new=AsyncMock(return_value=list(items))), \
              patch(
-                "opds_abs.feeds.author_feed.get_download_urls_from_item",
+                "opds_abs.core.feed_generator.get_download_urls_from_item",
                 new=AsyncMock(return_value=[{"ino": "1"}])):
             response = await generator.generate_author_items_feed(
                 "alice", "lib-1", "a1", page=2, per_page=1)
@@ -337,7 +337,7 @@ class GenerateCollectionItemsFeedTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(
                     return_value=("Favorites", items, generator.create_base_feed()))), \
              patch(
-                "opds_abs.feeds.collection_feed.get_download_urls_from_item",
+                "opds_abs.core.feed_generator.get_download_urls_from_item",
                 new=AsyncMock(return_value=[])):
             response = await generator.generate_collection_items_feed(
                 "alice", "lib-1", "c1", page=1, per_page=1)
@@ -420,7 +420,7 @@ class PrepareCollectionFeedIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 generator, "get_items_in_collection",
                 new=AsyncMock(return_value=list(items))), \
              patch(
-                "opds_abs.feeds.collection_feed.get_download_urls_from_item",
+                "opds_abs.core.feed_generator.get_download_urls_from_item",
                 new=AsyncMock(return_value=[{"ino": "1"}])):
             response = await generator.generate_collection_items_feed(
                 "alice", "lib-1", "c1", page=2, per_page=1)

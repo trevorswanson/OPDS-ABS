@@ -2,8 +2,6 @@
 # Standard library imports
 import asyncio
 import logging
-import copy
-import traceback
 
 # Third-party imports
 from fastapi.responses import RedirectResponse
@@ -13,6 +11,7 @@ from opds_abs.core.feed_generator import BaseFeedGenerator
 from opds_abs.api.client import fetch_from_api, get_download_urls_from_item
 from opds_abs.utils import dict_to_xml
 from opds_abs.utils.cache_utils import get_cached_library_items
+from opds_abs.utils.error_utils import log_error
 from opds_abs.config import ITEMS_PER_PAGE, PAGINATION_ENABLED
 
 # Set up logging
@@ -393,8 +392,7 @@ class LibraryFeedGenerator(BaseFeedGenerator):
                         filtered_books, collection_data, params, context)
 
         except Exception as e:
-            logger.error("Error processing collection data: %s", e)
-            traceback.print_exc()
+            log_error(e, context="Processing collection data")
 
         return None
 
@@ -441,21 +439,19 @@ class LibraryFeedGenerator(BaseFeedGenerator):
                 token=token
             )
 
-            # Create a copy to prevent modifying the cached data
-            library_items = copy.deepcopy(cached_items)
-
-            # Apply the requested sort order in memory
+            # sorted() returns a new list without mutating the cached items,
+            # so no copy of the (potentially large) cached list is needed here.
             if sort_param == 'addedAt':
                 # Sort by addedAt in descending order (newest first)
                 library_items = sorted(
-                    library_items,
+                    cached_items,
                     key=lambda x: x.get('addedAt', 0),
                     reverse=True
                 )
             elif sort_param == 'media.metadata.title':
                 # Sort by title in ascending order
                 library_items = sorted(
-                    library_items,
+                    cached_items,
                     key=lambda x: x.get('media', {}).get('metadata', {}).get('title', '').lower(),
                     reverse=False
                 )

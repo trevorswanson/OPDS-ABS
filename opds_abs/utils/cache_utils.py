@@ -24,7 +24,7 @@ from opds_abs.config import (
     LIBRARY_ITEMS_CACHE_EXPIRY,
     SEARCH_RESULTS_CACHE_EXPIRY,
     SERIES_DETAILS_CACHE_EXPIRY,
-    SERIES_ITEMS_CACHE_EXPIRY,  # Add this new constant
+    SERIES_ITEMS_CACHE_EXPIRY,
     CACHE_PERSISTENCE_ENABLED,
     CACHE_FILE_PATH,
     CACHE_SAVE_INTERVAL,
@@ -64,6 +64,21 @@ def _create_cache_key(
     # security boundary and must not be mistaken for credential hashing.
     key_str = "".join(components)
     return base64.urlsafe_b64encode(key_str.encode()).decode().rstrip("=")
+
+
+def has_ebook(media: Dict[str, Any]) -> bool:
+    """Check whether a book's media dict indicates it has an ebook.
+
+    Args:
+        media: A book's "media" dict from the Audiobookshelf API.
+
+    Returns:
+        bool: True if the media has an ebookFile or a truthy ebookFormat.
+    """
+    return (
+        media.get("ebookFile") is not None or
+        (media.get("ebookFormat") is not None and media.get("ebookFormat"))
+    )
 
 
 def load_cache_from_disk() -> None:
@@ -449,13 +464,7 @@ def _count_authors_with_ebooks(library_items):
         media = item.get("media", {})
         metadata = media.get("metadata", {})
 
-        # Efficient ebook detection
-        has_ebook = (
-            media.get("ebookFile") is not None or
-            (media.get("ebookFormat") is not None and media.get("ebookFormat"))
-        )
-
-        if has_ebook:
+        if has_ebook(media):
             # Get author name from metadata
             author_name = metadata.get("authorName")
             if author_name:

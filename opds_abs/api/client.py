@@ -63,16 +63,18 @@ def _resolve_auth_token(username, token, params):
         elif 'api_key' in params:
             token = params.pop('api_key')  # Use API key as token
             logger.debug("Using API key from params for user %s", username)
-        else:
-            # Try to get from the TOKEN_CACHE
+        elif AUTH_ENABLED:
+            # Only consult the token cache (and fail closed on a miss) when
+            # authentication is actually enabled; otherwise the token would
+            # be discarded below anyway.
             token = get_token_for_username(username)
             logger.debug("Token from cache for user %s: %s",
                          username, 'Found' if token else 'Not found')
 
-        # If no token from cache and authentication is enabled, we have a problem
-        if token is None and AUTH_ENABLED:
-            logger.error("No cached token available for user %s", username)
-            raise AuthenticationError(f"No authentication token available for user {username}")
+            if token is None:
+                logger.error("No cached token available for user %s", username)
+                raise AuthenticationError(
+                    f"No authentication token available for user {username}")
 
     # If authentication is disabled, proceed without a token
     if not AUTH_ENABLED:
