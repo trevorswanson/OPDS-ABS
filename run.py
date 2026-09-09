@@ -31,7 +31,7 @@ def run_server():
     logger.info(f"AUDIOBOOKSHELF_API: {AUDIOBOOKSHELF_API}")
     logger.info("-" * 50)
 
-    # Use log level from config.py, but convert to lowercase for uvicorn
+    # Use the configured log level, converted to lowercase for Uvicorn
     log_level = LOG_LEVEL.lower()
 
     # Run uvicorn with the specified log level and enable colored logs

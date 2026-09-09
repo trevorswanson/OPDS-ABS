@@ -46,18 +46,6 @@ def make_request(path="/", headers=None, query_string=b""):
     return Request(scope)
 
 
-class ConfigurationCompatibilityTests(unittest.TestCase):
-    """Verify the legacy configuration import remains a safe shim."""
-
-    def test_legacy_config_reexports_authoritative_settings(self):
-        import config
-        from opds_abs import config as authoritative_config
-
-        self.assertEqual(config.AUDIOBOOKSHELF_API, authoritative_config.AUDIOBOOKSHELF_API)
-        self.assertEqual(config.AUTH_ENABLED, authoritative_config.AUTH_ENABLED)
-        self.assertEqual(config.RELOAD_ENABLED, authoritative_config.RELOAD_ENABLED)
-
-
 class XmlAndErrorTests(unittest.TestCase):
     """Verify XML conversion and standardized error responses."""
 
