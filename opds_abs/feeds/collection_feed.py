@@ -6,7 +6,7 @@ import asyncio
 # Local application imports
 from opds_abs.core.feed_generator import BaseFeedGenerator
 from opds_abs.api.client import fetch_from_api, get_download_urls_from_item
-from opds_abs.config import AUDIOBOOKSHELF_API, ITEMS_PER_PAGE, PAGINATION_ENABLED
+from opds_abs.config import ITEMS_PER_PAGE, PAGINATION_ENABLED
 from opds_abs.utils import dict_to_xml
 from opds_abs.utils.cache_utils import get_cached_library_items
 from opds_abs.utils.error_utils import (
@@ -18,6 +18,7 @@ from opds_abs.utils.error_utils import (
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
 
 class CollectionFeedGenerator(BaseFeedGenerator):
     """Generator for collections feed.
@@ -114,9 +115,9 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             ]
 
             logger.debug("Found %d items in collection %s from cache",
-                        len(filtered_items),
-                        collection_name
-            )
+                         len(filtered_items),
+                         collection_name
+                         )
             return filtered_items
 
         except Exception as e:
@@ -148,7 +149,7 @@ class CollectionFeedGenerator(BaseFeedGenerator):
         """
         try:
             logger.debug("Generating collection items feed for collection %s (page %d)",
-                        collection_id, page)
+                         collection_id, page)
 
             # Get collection details first to get the name
             collection_info = await self.get_collection_details(
@@ -182,7 +183,12 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                 error_data = {
                     "entry": {
                         "title": {"_text": "No books found"},
-                        "content": {"_text": f"No books in the {collection_name} collection with ebooks were found in this library."}
+                        "content": {
+                            "_text": (
+                                f"No books in the {collection_name} collection with ebooks "
+                                "were found in this library."
+                            )
+                        }
                     }
                 }
                 dict_to_xml(feed, error_data)
@@ -197,16 +203,17 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                 # Use items per page from config if not specified
                 per_page = ITEMS_PER_PAGE if per_page is None else per_page
                 # If per_page is 0, we'll show all items without pagination
-                no_pagination = (per_page <= 0)
+                no_pagination = per_page <= 0
 
             # Apply pagination
             total_books = len(collection_items)
-            total_pages = 1 if no_pagination else (total_books + per_page - 1) // per_page  # Ceiling division
+            total_pages = 1 if no_pagination else (
+                total_books + per_page - 1) // per_page  # Ceiling division
 
             # Adjust page number if out of bounds
             if page < 1:
                 page = 1
-            elif page > total_pages and total_pages > 0:
+            elif 0 < total_pages < page:
                 page = total_pages
 
             if no_pagination:
@@ -222,20 +229,22 @@ class CollectionFeedGenerator(BaseFeedGenerator):
 
             # Add pagination links only if pagination is enabled
             if not no_pagination:
-                self._add_pagination_links(feed, username, library_id, collection_id, page, total_pages, token)
+                self._add_pagination_links(feed, username, library_id,
+                                           collection_id, page, total_pages, token)
 
             # Get ebook files in optimal batch sizes to avoid overwhelming the server
-            BATCH_SIZE = 5  # Adjust based on server capacity
+            batch_size = 5  # Adjust based on server capacity
             tasks = []
 
             for book in paged_items:
                 book_id = book.get("id", "")
                 if book_id:
-                    tasks.append(get_download_urls_from_item(book_id, username=username, token=token))
+                    tasks.append(get_download_urls_from_item(
+                        book_id, username=username, token=token))
 
             # Process in batches if we have a lot of books
-            for i in range(0, len(tasks), BATCH_SIZE):
-                batch_tasks = tasks[i:i+BATCH_SIZE]
+            for i in range(0, len(tasks), batch_size):
+                batch_tasks = tasks[i:i+batch_size]
                 batch_results = await asyncio.gather(*batch_tasks)
 
                 # Add each book from this batch to the feed
@@ -341,7 +350,10 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             books_with_ebooks = [
                 book for book in collection.get("books", [])
                 if (book.get("media", {}).get("ebookFile") is not None or
-                   (book.get("media", {}).get("ebookFormat") is not None and book.get("media", {}).get("ebookFormat")))
+                    (
+                        book.get("media", {}).get("ebookFormat") is not None
+                        and book.get("media", {}).get("ebookFormat")
+                    ))
             ]
 
             # Get the book count for the entry content
@@ -366,7 +378,12 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                     "title": {"_text": collection_name},
                     "id": {"_text": collection_id},
                     "updated": {"_text": self.get_current_timestamp()},
-                    "content": {"_text": f"Collection with {book_count} ebook{'s' if book_count != 1 else ''}"},
+                    "content": {
+                        "_text": (
+                            f"Collection with {book_count} "
+                            f"ebook{'s' if book_count != 1 else ''}"
+                        )
+                    },
                     "link": [
                         {
                             "_attrs": {
@@ -396,7 +413,8 @@ class CollectionFeedGenerator(BaseFeedGenerator):
         except Exception as e:
             context = f"Adding collection {collection.get('name', 'unknown')} to feed"
             log_error(e, context=context)
-            raise FeedGenerationError(f"Unexpected error adding collection to feed: {str(e)}") from e
+            raise FeedGenerationError(
+                f"Unexpected error adding collection to feed: {str(e)}") from e
 
     async def generate_collections_feed(self, username, library_id, token=None):
         """Generate an OPDS feed listing all collections in a library.
@@ -411,9 +429,9 @@ class CollectionFeedGenerator(BaseFeedGenerator):
         """
         try:
             logger.debug("Generating collections feed for user %s, library %s",
-                        username,
-                        library_id
-            )
+                         username,
+                         library_id
+                         )
 
             # Get all collections from the API
             collections = await self.get_collections(username, library_id, token=token)
@@ -437,30 +455,43 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                 collection_id = collection.get("id", "")
                 if collection_id:
                     try:
-                        collection_data = await fetch_from_api(f"/collections/{collection_id}", username=username, token=token)
+                        collection_data = await fetch_from_api(
+                            f"/collections/{collection_id}",
+                            username=username,
+                            token=token,
+                        )
 
                         # Check if there are ebooks in this collection and count them
                         ebook_count = 0
                         for book in collection_data.get("books", []):
                             media = book.get("media", {})
-                            if (media.get("ebookFile") is not None or
-                                (media.get("ebookFormat") is not None and media.get("ebookFormat"))):
+                            if (
+                                    media.get("ebookFile") is not None
+                                    or (
+                                        media.get("ebookFormat") is not None
+                                        and media.get("ebookFormat")
+                                    )
+                            ):
                                 ebook_count += 1
 
                         if ebook_count > 0:
-                            logger.debug("Collection \"%s\" has %d ebooks", collection_data.get('name'), ebook_count)
+                            logger.debug("Collection \"%s\" has %d ebooks",
+                                         collection_data.get('name'), ebook_count)
                             filtered_collections.append(collection_data)
                     except ResourceNotFoundError as e:
                         context = f"Fetching collection {collection_id}"
                         log_error(e, context=context, log_traceback=False)
-                        collection_errors.append(f"Collection {collection.get('name', collection_id)}: {str(e)}")
+                        collection_errors.append(
+                            f"Collection {collection.get('name', collection_id)}: {str(e)}")
                     except Exception as e:
                         context = f"Fetching collection {collection_id}"
                         log_error(e, context=context)
-                        collection_errors.append(f"Collection {collection.get('name', collection_id)}: {str(e)}")
+                        collection_errors.append(
+                            f"Collection {collection.get('name', collection_id)}: {str(e)}")
 
             # Sort collections by name
-            filtered_collections = sorted(filtered_collections, key=lambda x: x.get("name", "").lower())
+            filtered_collections = sorted(
+                filtered_collections, key=lambda x: x.get("name", "").lower())
 
             # Add each collection to the feed
             for collection in filtered_collections:
@@ -468,7 +499,8 @@ class CollectionFeedGenerator(BaseFeedGenerator):
 
             # If we have no collections but had errors, add an entry about the errors
             if not filtered_collections and collection_errors:
-                error_message = "Some collections could not be retrieved:\n" + "\n".join(collection_errors)
+                error_message = "Some collections could not be retrieved:\n" + \
+                    "\n".join(collection_errors)
                 error_data = {
                     "entry": {
                         "title": {"_text": "Error retrieving some collections"},

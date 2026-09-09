@@ -36,6 +36,8 @@ from fastapi.responses import Response, JSONResponse
 logger = logging.getLogger(__name__)
 
 # Custom exception classes
+
+
 class OPDSBaseException(Exception):
     """Base exception for all OPDS-ABS specific exceptions.
 
@@ -57,25 +59,30 @@ class OPDSBaseException(Exception):
     status_code = 500
     default_message = "An internal server error occurred"
 
+
 class ResourceNotFoundError(OPDSBaseException):
     """Raised when a requested resource is not found."""
     status_code = 404
     default_message = "Resource not found"
+
 
 class AuthenticationError(OPDSBaseException):
     """Raised when authentication fails."""
     status_code = 401
     default_message = "Authentication failed"
 
+
 class APIClientError(OPDSBaseException):
     """Raised when there's an error communicating with Audiobookshelf."""
     status_code = 502
     default_message = "Error communicating with Audiobookshelf"
 
+
 class FeedGenerationError(OPDSBaseException):
     """Raised when there's an error generating a feed."""
     status_code = 500
     default_message = "Error generating feed"
+
 
 class CacheError(OPDSBaseException):
     """Raised when there's an error with the cache."""
@@ -83,6 +90,8 @@ class CacheError(OPDSBaseException):
     default_message = "Cache operation failed"
 
 # Error handling functions
+
+
 def handle_exception(
     exc: Exception,
     context: str = "",
@@ -152,16 +161,25 @@ def handle_exception(
                 return handle_exception(e, context=context)
         ```
     """
-    # Determine the status code
+    # Determine the status code and a safe client-facing message
     if isinstance(exc, OPDSBaseException):
         code = exc.status_code
-        message = str(exc) or exc.default_message
+        # Defense in depth: always use the class-level default rather than
+        # the instance message, so a future raise site can never leak
+        # something sensitive into a client-facing response by accident.
+        # The real message is still logged in full below.
+        message = exc.default_message
     elif isinstance(exc, HTTPException):
         code = exc.status_code
-        message = exc.detail
+        # Same defense-in-depth reasoning as above - don't pass through
+        # detail text verbatim, even though today's call sites are safe.
+        message = "Request failed" if 400 <= code < 500 else "An internal server error occurred"
     else:
         code = 500
-        message = str(exc) or "An unexpected error occurred"
+        # Don't leak internal exception details (which can include things like
+        # file paths or stack-trace text) to clients for unexpected errors.
+        # The real message is still logged in full below.
+        message = "An unexpected error occurred"
 
     # Override status code if provided
     if status_code is not None:
@@ -174,10 +192,11 @@ def handle_exception(
     if context:
         log_prefix += f" in {context}"
 
+    log_message = str(exc) or message
     if log_traceback:
-        logger.exception("%s: %s", log_prefix, message)
+        logger.exception("%s: %s", log_prefix, log_message)
     else:
-        logger.error("%s: %s", log_prefix, message)
+        logger.error("%s: %s", log_prefix, log_message)
 
     # Create error response
     error_detail = {
@@ -195,19 +214,19 @@ def handle_exception(
             status_code=code,
             content=error_detail
         )
-    else:
-        # Create simple XML error response
-        xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+    # Create simple XML error response
+    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <error xmlns="http://opds-spec.org/2010/catalog">
   <id>{error_id}</id>
   <message>{message}</message>
   {f"<context>{context}</context>" if context else ""}
 </error>"""
-        return Response(
-            content=xml_content,
-            media_type="application/xml",
-            status_code=code
-        )
+    return Response(
+        content=xml_content,
+        media_type="application/xml",
+        status_code=code
+    )
+
 
 def convert_to_http_exception(
     exc: Exception,
@@ -235,6 +254,7 @@ def convert_to_http_exception(
         message = detail or str(exc) or "An unexpected error occurred"
 
     return HTTPException(status_code=code, detail=message)
+
 
 def log_error(
     exc: Exception,

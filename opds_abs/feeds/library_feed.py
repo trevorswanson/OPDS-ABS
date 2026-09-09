@@ -17,6 +17,7 @@ from opds_abs.config import ITEMS_PER_PAGE, PAGINATION_ENABLED
 # Set up logging
 logger = logging.getLogger(__name__)
 
+
 class LibraryFeedGenerator(BaseFeedGenerator):
     """Generator for library items feed.
 
@@ -146,8 +147,7 @@ class LibraryFeedGenerator(BaseFeedGenerator):
         # Extract pagination parameters
         try:
             start_index = int(params.get('start_index', 1))
-            if start_index < 1:
-                start_index = 1
+            start_index = max(start_index, 1)
         except (ValueError, TypeError):
             start_index = 1
 
@@ -160,7 +160,7 @@ class LibraryFeedGenerator(BaseFeedGenerator):
             # Use items per page from config
             items_per_page = ITEMS_PER_PAGE
             # If items_per_page is 0, we'll show all items without pagination
-            no_pagination = (items_per_page <= 0)
+            no_pagination = items_per_page <= 0
 
         # Current page calculation (1-based)
         page = 1 if no_pagination else ((start_index - 1) // items_per_page) + 1
@@ -168,7 +168,7 @@ class LibraryFeedGenerator(BaseFeedGenerator):
         # Build current path for pagination links
         path_params = []
         for key, value in params.items():
-            if key != 'start_index' and key != 'token':
+            if key not in ('start_index', 'token'):
                 path_params.append(f"{key}={value}")
 
         # Properly construct the path with &
@@ -195,7 +195,8 @@ class LibraryFeedGenerator(BaseFeedGenerator):
             try:
                 # Directly fetch the collection with its books
                 collection_endpoint = f"/collections/{collection_id}"
-                collection_data = await fetch_from_api(collection_endpoint, username=username, token=token)
+                collection_data = await fetch_from_api(
+                    collection_endpoint, username=username, token=token)
 
                 # Only proceed if we have collection data with books
                 if collection_data and collection_data.get("books"):
@@ -210,7 +211,7 @@ class LibraryFeedGenerator(BaseFeedGenerator):
                         # Check for ebookFile
                         if media.get("ebookFile") is not None:
                             has_ebook = True
-                            # Make sure ebookFormat is set based on the file extension if it's missing
+                            # Set ebookFormat from the file extension when missing.
                             if media.get("ebookFormat") is None:
                                 # Extract format from ebookFile extension or set a default
                                 ebook_file = media.get("ebookFile", {})
@@ -241,10 +242,12 @@ class LibraryFeedGenerator(BaseFeedGenerator):
                         total_books = len(sorted_books)
 
                         # Apply pagination
-                        sorted_books = self.paginate_results(sorted_books, start_index, items_per_page)
+                        sorted_books = self.paginate_results(
+                            sorted_books, start_index, items_per_page)
 
                         # Generate feed using these books directly
-                        feed = self.create_base_feed(username, library_id, current_path_with_page, token)
+                        feed = self.create_base_feed(
+                            username, library_id, current_path_with_page, token)
 
                         # Create feed metadata using dictionary approach
                         feed_data = {
@@ -252,25 +255,33 @@ class LibraryFeedGenerator(BaseFeedGenerator):
                             "author": {
                                 "name": {"_text": "OPDS Audiobookshelf"}
                             },
-                            "title": {"_text": f"{username}'s books in collection: {collection_data.get('name', 'Unknown')}"}
+                            "title": {
+                                "_text": (
+                                    f"{username}'s books in collection: "
+                                    f"{collection_data.get('name', 'Unknown')}"
+                                )
+                            }
                         }
                         dict_to_xml(feed, feed_data)
 
                         # Add pagination metadata and links
                         if not no_pagination:
                             self.add_pagination_metadata(feed, page, items_per_page, total_books)
-                            self.add_pagination_links(feed, current_path.rstrip('&?'),
-                                                    page, items_per_page, total_books, token=token)
+                            self.add_pagination_links(
+                                feed, current_path.rstrip('&?'), page,
+                                items_per_page, total_books, token=token)
 
                         # Get ebook files for each book
                         tasks = []
                         for book in sorted_books:
                             book_id = book.get("id", "")
-                            tasks.append(get_download_urls_from_item(book_id, username=username, token=token))
+                            tasks.append(get_download_urls_from_item(
+                                book_id, username=username, token=token))
 
                         ebook_inos_list = await asyncio.gather(*tasks)
                         for book, ebook_inos in zip(sorted_books, ebook_inos_list):
-                            self.add_book_to_feed(feed, book, ebook_inos, params.get('filter',''), token=token)
+                            self.add_book_to_feed(feed, book, ebook_inos,
+                                                  params.get('filter', ''), token=token)
 
                         return self.create_response(feed)
 
@@ -291,7 +302,8 @@ class LibraryFeedGenerator(BaseFeedGenerator):
         )
 
         # Log the detected parameters to help with debugging
-        logger.debug("Feed params - sort: %s, desc: %s, is_special: %s", sort_param, desc_param, is_special_feed)
+        logger.debug("Feed params - sort: %s, desc: %s, is_special: %s",
+                     sort_param, desc_param, is_special_feed)
 
         if is_special_feed:
             # For special feeds like "recent", we can reuse the cached library items
@@ -340,7 +352,8 @@ class LibraryFeedGenerator(BaseFeedGenerator):
         total_items = len(library_items)
 
         # Apply pagination
-        paginated_items = library_items if no_pagination else self.paginate_results(library_items, start_index, items_per_page)
+        paginated_items = library_items if no_pagination else self.paginate_results(
+            library_items, start_index, items_per_page)
 
         # Create feed with pagination-aware path
         feed = self.create_base_feed(username, library_id, current_path_with_page, token)
@@ -359,7 +372,7 @@ class LibraryFeedGenerator(BaseFeedGenerator):
         if not no_pagination:
             self.add_pagination_metadata(feed, page, items_per_page, total_items)
             self.add_pagination_links(feed, current_path.rstrip('&?'),
-                                    page, items_per_page, total_items, token=token)
+                                      page, items_per_page, total_items, token=token)
 
         tasks = []
         for book in paginated_items:
@@ -368,6 +381,6 @@ class LibraryFeedGenerator(BaseFeedGenerator):
 
         ebook_inos_list = await asyncio.gather(*tasks)
         for book, ebook_inos in zip(paginated_items, ebook_inos_list):
-            self.add_book_to_feed(feed, book, ebook_inos, params.get('filter',''), token=token)
+            self.add_book_to_feed(feed, book, ebook_inos, params.get('filter', ''), token=token)
 
         return self.create_response(feed)

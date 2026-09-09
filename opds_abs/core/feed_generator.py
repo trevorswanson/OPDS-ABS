@@ -9,7 +9,6 @@ from lxml import etree
 from fastapi.responses import Response
 
 # Local application imports
-from opds_abs.config import AUDIOBOOKSHELF_API
 from opds_abs.utils import dict_to_xml
 from opds_abs.utils.error_utils import FeedGenerationError, log_error
 
@@ -30,6 +29,7 @@ FORMAT_TO_MIMETYPE = {
     "cbt":  "application/x-cbt",
     "cb7":  "application/x-cb7",
 }
+
 
 class BaseFeedGenerator:
     """Base class for creating OPDS feed components.
@@ -218,22 +218,21 @@ class BaseFeedGenerator:
                     logger.debug("Using token from ebook file for book '%s'", book_title)
 
             # Log detailed information about the book and token
-            logger.debug("Adding book to feed: '%s' (ID: %s), token present: %s", book_title, book_id, effective_token is not None)
+            logger.debug("Adding book to feed: '%s' (ID: %s), token present: %s",
+                         book_title, book_id, effective_token is not None)
 
             # Extract ebook format - check both direct and nested paths (for search results)
             ebook_format = media.get("ebookFormat", media.get("ebookFile", {}).get("ebookFormat"))
             logger.debug("Book '%s' format: %s", book_title, ebook_format)
 
             for ebook in ebook_inos:
-                # Use external URL for client-facing download links
-                from opds_abs.config import AUDIOBOOKSHELF_EXTERNAL_URL
-                book_path = f"{AUDIOBOOKSHELF_EXTERNAL_URL}/api/items/{book_id}"
                 file_ino = ebook.get('ino')
 
                 # Use our proxy endpoint instead of direct Audiobookshelf API link
                 # No need to append token as query parameter since our proxy handles authentication
                 download_path = f"/opds/proxy/download/{book_id}/file/{file_ino}"
-                logger.debug("Generated proxied download URL for '%s': %s", book_title, download_path)
+                logger.debug("Generated proxied download URL for '%s': %s",
+                             book_title, download_path)
 
                 # Proxy covers through OPDS-ABS so clients do not need ABS credentials.
                 cover_url = f"/opds/proxy/cover/{book_id}"
@@ -346,7 +345,7 @@ class BaseFeedGenerator:
             for result in data.get("results", []):
                 media = result.get("media", {})
                 if "ebookFormat" in media and media.get("ebookFormat", None):
-                    result.update({"opds_seq":n})
+                    result.update({"opds_seq": n})
                     n += 1
                     filtered_results.append(result)
 
@@ -412,16 +411,19 @@ class BaseFeedGenerator:
         start_index = (page - 1) * items_per_page + 1  # OpenSearch is 1-indexed
 
         # Add opensearch elements
-        items_per_page_el = etree.SubElement(feed, "{http://a9.com/-/spec/opensearch/1.1/}itemsPerPage")
+        items_per_page_el = etree.SubElement(
+            feed, "{http://a9.com/-/spec/opensearch/1.1/}itemsPerPage")
         items_per_page_el.text = str(items_per_page)
 
         start_index_el = etree.SubElement(feed, "{http://a9.com/-/spec/opensearch/1.1/}startIndex")
         start_index_el.text = str(start_index)
 
-        total_results_el = etree.SubElement(feed, "{http://a9.com/-/spec/opensearch/1.1/}totalResults")
+        total_results_el = etree.SubElement(
+            feed, "{http://a9.com/-/spec/opensearch/1.1/}totalResults")
         total_results_el.text = str(total_items)
 
-    def add_pagination_links(self, feed, current_path, page, items_per_page, total_items, token=None):
+    def add_pagination_links(
+            self, feed, current_path, page, items_per_page, total_items, token=None):
         """Add next/previous pagination links to the feed.
 
         Args:
@@ -454,7 +456,10 @@ class BaseFeedGenerator:
                         "rel": "next",
                         "title": "Next Page",
                         "type": "application/atom+xml;profile=opds-catalog",
-                        "href": f"/opds/{current_path}{separator}start_index={next_start_index}{auth_param}"
+                        "href": (
+                            f"/opds/{current_path}{separator}"
+                            f"start_index={next_start_index}{auth_param}"
+                        )
                     }
                 }
             }
@@ -474,7 +479,10 @@ class BaseFeedGenerator:
                         "rel": "previous",
                         "title": "Previous Page",
                         "type": "application/atom+xml;profile=opds-catalog",
-                        "href": f"/opds/{current_path}{separator}start_index={prev_start_index}{auth_param}"
+                        "href": (
+                            f"/opds/{current_path}{separator}"
+                            f"start_index={prev_start_index}{auth_param}"
+                        )
                     }
                 }
             }

@@ -15,6 +15,7 @@ import re
 FILE_REGEX = re.compile(r'^(.+?):(\d+)')  # Matches filename and line number
 ERROR_REGEX = re.compile(r'^\s+([A-Z]\d+): (.+)$')  # Matches error code and message
 
+
 def parse_args():
     """Parse command line arguments.
 
@@ -23,16 +24,17 @@ def parse_args():
     """
     parser = argparse.ArgumentParser(description='Check docstrings in Python files')
     parser.add_argument('path', nargs='?', default='opds_abs',
-                      help='Path to directory or file to check (default: opds_abs)')
+                        help='Path to directory or file to check (default: opds_abs)')
     parser.add_argument('--summary', '-s', action='store_true',
-                      help='Display only a summary of issues')
+                        help='Display only a summary of issues')
     parser.add_argument('--verbose', '-v', action='store_true',
-                      help='Display detailed information about issues')
+                        help='Display detailed information about issues')
     parser.add_argument('--errors', '-e', action='store_true',
-                      help='Show only errors, not file paths')
+                        help='Show only errors, not file paths')
     parser.add_argument('--fix-missing', '-f', action='store_true',
-                      help='Generate template docstrings for missing ones (outputs to stdout)')
+                        help='Generate template docstrings for missing ones (outputs to stdout)')
     return parser.parse_args()
+
 
 def run_pydocstyle(path):
     """Run pydocstyle on the specified path.
@@ -47,6 +49,7 @@ def run_pydocstyle(path):
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     stdout, stderr = process.communicate()
     return process.returncode, stdout, stderr
+
 
 def parse_pydocstyle_output(output):
     """Parse pydocstyle output into a structured format.
@@ -79,6 +82,7 @@ def parse_pydocstyle_output(output):
             })
 
     return results
+
 
 def display_results(results, args):
     """Display the processed results.
@@ -137,23 +141,24 @@ def display_results(results, args):
         'D417': 'Missing argument descriptions in the docstring'
     }
 
-    print(f"\n📊 Docstring Check Summary:")
+    print("\n📊 Docstring Check Summary:")
     print(f"{'='*80}")
     print(f"Files with issues: {total_files}")
     print(f"Total issues found: {total_errors}")
-    print(f"\n🔍 Issues by type:")
+    print("\n🔍 Issues by type:")
 
     for code, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True):
         meaning = error_meanings.get(code, "Unknown issue")
         print(f"  {code}: {count} occurrences - {meaning}")
 
     if not args.summary:
-        print(f"\n📝 Detailed issues:")
+        print("\n📝 Detailed issues:")
         print(f"{'='*80}")
         for file_path, errors in sorted(results.items()):
             print(f"\n📄 {file_path} ({len(errors)} issues)")
             for error in errors:
                 print(f"  Line {error['line']}: {error['code']} - {error['message']}")
+
 
 def generate_template_docstrings(results):
     """Generate template docstrings for missing docstrings.
@@ -200,6 +205,7 @@ def function_name(param1, param2):
     # 3. Generate appropriate template docstrings based on parameters
     # 4. Suggest addition of these docstrings to the files
 
+
 def main():
     """Run the main script to check docstrings."""
     args = parse_args()
@@ -217,6 +223,7 @@ def main():
 
     # Return exit code based on whether issues were found
     return 0 if not results else 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
