@@ -162,7 +162,7 @@ search_feed = SearchFeedGenerator()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     """Load the cache from disk on application startup and log configuration."""
     # Log configuration settings
     logger.info("Starting OPDS-ABS with configuration:")
@@ -417,7 +417,7 @@ def index(request: Request):
 
 @app.get("/opds", response_class=RedirectResponse)
 async def opds_root_redirect(
-    request: Request,
+    _request: Request,
     auth_info: tuple = Depends(get_authenticated_user)
 ):
     """Redirect to the authenticated user's OPDS root.
@@ -950,7 +950,7 @@ async def opds_author_items(
 
 
 @app.get("/admin/cache/stats")
-async def get_cache_stats(auth_info: tuple = Depends(require_auth)):
+async def get_cache_stats(_auth_info: tuple = Depends(require_auth)):
     """Get statistics about the cache.
 
     Returns:
@@ -993,7 +993,7 @@ async def get_cache_stats(auth_info: tuple = Depends(require_auth)):
 
 
 @app.post("/admin/cache/clear")
-async def clear_all_cache(auth_info: tuple = Depends(require_auth)):
+async def clear_all_cache(_auth_info: tuple = Depends(require_auth)):
     """Clear all items in the cache.
 
     Returns:
@@ -1012,7 +1012,7 @@ async def clear_all_cache(auth_info: tuple = Depends(require_auth)):
 async def invalidate_specific_cache(
     endpoint: str = None,
     username: str = None,
-    auth_info: tuple = Depends(require_auth)
+    _auth_info: tuple = Depends(require_auth)
 ):
     """Invalidate cache for a specific endpoint.
 
@@ -1108,7 +1108,7 @@ async def proxy_author_image(
 async def proxy_download(
     item_id: str,
     file_ino: str,
-    request: Request,
+    _request: Request,
     auth_info: tuple = Depends(get_authenticated_user)
 ):
     """Proxy file downloads from Audiobookshelf to handle authentication properly.
@@ -1130,7 +1130,7 @@ async def proxy_download(
     from fastapi.responses import StreamingResponse
     import aiohttp
 
-    username, token, display_name = auth_info
+    _username, token, _display_name = auth_info
 
     if not token:
         # Log at debug level instead of error since this is expected behavior
