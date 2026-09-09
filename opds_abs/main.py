@@ -51,6 +51,7 @@ from urllib.parse import urlparse
 
 # Third-party imports
 import aiohttp
+from markupsafe import escape
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import (
     HTMLResponse,
@@ -501,21 +502,15 @@ async def search_xml(
             return effective_username
 
         params = dict(request.query_params)
-        # Confirmed false positive: Jinja2Templates defaults to
-        # jinja2.select_autoescape(), which enables autoescaping for
-        # templates ending in "html"/"htm"/"xml" - search.xml qualifies, so
-        # username, token, and searchTerms are all HTML-entity-escaped
-        # before reaching the rendered response regardless of their
-        # contents. Verified directly: rendering this template with
-        # '"><script>alert(1)</script>' for each value produces
-        # "&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;" with no
-        # unescaped markup reaching the output.
-        # codeql[py/reflected-xss]
+        # Explicitly escape values reflected into the template. Jinja2Templates
+        # already autoescapes "search.xml" via its default select_autoescape(),
+        # but escaping here as well removes any ambiguity for user-controlled
+        # input (searchTerms, token) reaching the response.
         return templates.TemplateResponse(request, "search.xml", {
-            "username": effective_username,
-            "library_id": library_id,
-            "searchTerms": params.get('q', ''),
-            "token": token  # Add token to the template context
+            "username": escape(effective_username),
+            "library_id": escape(library_id),
+            "searchTerms": escape(params.get('q', '')),
+            "token": escape(token) if token else token
         })
     except Exception as e:
         log_error(e, context=f"Rendering search XML for user {username}, library {library_id}")
