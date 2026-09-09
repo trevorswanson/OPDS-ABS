@@ -31,7 +31,9 @@ class AuthorFeedGenerator(BaseFeedGenerator):
         Inherits all attributes from BaseFeedGenerator.
     """
 
-    async def get_author_by_id(self, username: str, library_id: str, author_id: str, token: Optional[str] = None) -> Dict[str, Any]:
+    async def get_author_by_id(
+            self, username: str, library_id: str, author_id: str,
+            token: Optional[str] = None) -> Dict[str, Any]:
         """Get author information by ID from the cached list of authors with ebooks.
 
         Args:
@@ -58,7 +60,9 @@ class AuthorFeedGenerator(BaseFeedGenerator):
         logger.warning("Could not find author with ID %s in library %s", author_id, library_id)
         return {}
 
-    async def filter_items_by_author_id(self, username: str, library_id: str, author_id: str, token: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def filter_items_by_author_id(
+            self, username: str, library_id: str, author_id: str,
+            token: Optional[str] = None) -> List[Dict[str, Any]]:
         """Filter items by author ID using cached items when possible.
 
         Args:
@@ -129,8 +133,10 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             )
             return self.filter_items(data)
 
-    async def generate_author_items_feed(self, username: str, library_id: str, author_id: str, token: Optional[str] = None,
-                                         page: int = 1, per_page: int = None):
+    async def generate_author_items_feed(
+            self, username: str, library_id: str, author_id: str,
+            token: Optional[str] = None,
+            page: int = 1, per_page: int = None):
         """Generate a feed of items by a specific author.
 
         Args:
@@ -180,7 +186,11 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                 error_data = {
                     "entry": {
                         "title": {"_text": "No books found"},
-                        "content": {"_text": f"No ebooks by {author_name} were found in this library."}
+                        "content": {
+                            "_text": (
+                                f"No ebooks by {author_name} were found in this library."
+                            )
+                        }
                     }
                 }
                 dict_to_xml(feed, error_data)
@@ -391,7 +401,10 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             log_error(e, context=context)
             raise FeedGenerationError(f"Unexpected error adding author to feed: {str(e)}") from e
 
-    async def get_authors_with_ebooks(self, username: str, library_id: str, token: Optional[str] = None, bypass_cache: bool = False) -> List[Dict[str, Any]]:
+    async def get_authors_with_ebooks(
+            self, username: str, library_id: str,
+            token: Optional[str] = None, bypass_cache: bool = False
+    ) -> List[Dict[str, Any]]:
         """Get list of authors who have books with ebook files.
 
         Args:
@@ -434,8 +447,9 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             log_error(e, context=context)
             raise FeedGenerationError(f"Error processing authors with ebooks: {str(e)}") from e
 
-    async def generate_authors_feed(self, username: str, library_id: str, token: Optional[str] = None,
-                                    page: int = 1, per_page: int = 50):
+    async def generate_authors_feed(
+            self, username: str, library_id: str, token: Optional[str] = None,
+            page: int = 1, per_page: int = 50):
         """Generate an OPDS feed listing authors with ebooks.
 
         Creates an OPDS feed containing all authors in the specified library
@@ -480,7 +494,11 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                     error_data = {
                         "entry": {
                             "title": {"_text": "No authors with ebooks found"},
-                            "content": {"_text": "Could not find any authors with ebooks in the library"}
+                            "content": {
+                                "_text": (
+                                    "Could not find any authors with ebooks in the library"
+                                )
+                            }
                         }
                     }
                     dict_to_xml(feed, error_data)
