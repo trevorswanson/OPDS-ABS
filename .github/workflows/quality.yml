@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   static-analysis:
-    name: Advisory Flake8 and Pylint
+    name: Advisory Ruff and Pylint
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -29,12 +29,12 @@ jobs:
       - name: Install development dependencies
         run: python -m pip install -r requirements-dev.txt
 
-      - name: Run Flake8 advisory scan
+      - name: Run Ruff advisory scan
         run: |
           set +e
-          flake8 . --output-file=flake8-report.txt
+          ruff check . > ruff-report.txt
           status=$?
-          printf 'Flake8 exit status: %s\n' "$status" | tee -a flake8-report.txt
+          printf 'Ruff exit status: %s\n' "$status" | tee -a ruff-report.txt
           exit 0
 
       - name: Run Pylint advisory scan
@@ -51,7 +51,7 @@ jobs:
         with:
           name: static-analysis-reports
           path: |
-            flake8-report.txt
+            ruff-report.txt
             pylint-report.txt
           retention-days: 14
 
