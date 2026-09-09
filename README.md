@@ -128,6 +128,8 @@ services:
 
       # Performance settings
       - OPDS_LOG_LEVEL=INFO
+      # Development only; leave false in Docker to avoid filesystem polling
+      - OPDS_RELOAD=false
       - ITEMS_PER_PAGE=25  # Set to 0 to disable pagination
 ```
 
@@ -146,6 +148,7 @@ services:
 | `PGID` | Group ID for file ownership | `1000` |
 | `ITEMS_PER_PAGE` | Number of items per page, 0 to disable pagination | `25` |
 | `OPDS_LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | `INFO` |
+| `OPDS_RELOAD` | Enable Uvicorn hot reload; intended for local development | `false` |
 | `CACHE_PERSISTENCE_ENABLED` | Enable/disable cache persistence | `true` |
 
 ## 🐳 Running from GitHub Container Registry (GHCR)

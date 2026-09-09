@@ -352,8 +352,7 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                 for book in books_with_ebooks:
                     book_id = book.get("id")
                     if book_id:
-                        book_path = f"{AUDIOBOOKSHELF_API}/items/{book_id}"
-                        cover_url = f"{book_path}/cover?format=jpeg"
+                        cover_url = f"/opds/proxy/cover/{book_id}"
                         break
 
             # Add token to the collection link if provided

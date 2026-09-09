@@ -390,8 +390,7 @@ class SeriesFeedGenerator(BaseFeedGenerator):
         first_book = series.get('books', [])[0] if series.get('books') else {}
         first_book_id = first_book.get("id", None)
         first_book_metadata = first_book.get('media', {}).get('metadata', {})
-        book_path = f"{AUDIOBOOKSHELF_API}/items/{first_book_id}" if first_book_id else ""
-        cover_url = f"{book_path}/cover?format=jpeg" if book_path else ""
+        cover_url = f"/opds/proxy/cover/{first_book_id}" if first_book_id else ""
 
         # Determine if this was called from search feed by checking if authorName is already set
         # The search feed will directly set authorName, while series feed won't have this property

@@ -330,7 +330,7 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             # Get a cover url if we have a book with an ebook
             cover_url = "/static/images/unknown-author.png"
             if author.get("imagePath"):
-                cover_url = f"{AUDIOBOOKSHELF_API}/authors/{author.get('id')}/image?format=jpeg"
+                cover_url = f"/opds/proxy/author-image/{author.get('id')}"
 
             # Get author ID and name
             author_id = author.get("id", "")

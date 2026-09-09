@@ -1003,6 +1003,65 @@ async def invalidate_specific_cache(
         raise CacheError(f"Failed to invalidate cache for {endpoint}") from e
 
 
+async def _proxy_authenticated_image(url: str, token: str) -> Response:
+    """Fetch an Audiobookshelf image using the authenticated OPDS token."""
+    import aiohttp
+
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as upstream:
+                if upstream.status in (401, 403):
+                    raise HTTPException(status_code=401, detail="Audiobookshelf image authentication failed")
+                if upstream.status == 404:
+                    raise HTTPException(status_code=404, detail="Image not found")
+                upstream.raise_for_status()
+                content = await upstream.read()
+                media_type = upstream.headers.get("Content-Type", "image/jpeg")
+                return Response(content=content, media_type=media_type)
+    except HTTPException:
+        raise
+    except aiohttp.ClientError as exc:
+        logger.error("Error proxying Audiobookshelf image: %s", str(exc))
+        raise HTTPException(status_code=502, detail="Unable to fetch image from Audiobookshelf") from exc
+
+
+@app.get("/opds/proxy/cover/{item_id}")
+async def proxy_cover(
+    item_id: str,
+    auth_info: tuple = Depends(get_authenticated_user)
+):
+    """Proxy a book cover so OPDS clients do not need ABS credentials."""
+    _, token, _ = auth_info
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required for covers",
+            headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
+        )
+    return await _proxy_authenticated_image(
+        f"{AUDIOBOOKSHELF_API}/items/{item_id}/cover?format=jpeg", token
+    )
+
+
+@app.get("/opds/proxy/author-image/{author_id}")
+async def proxy_author_image(
+    author_id: str,
+    auth_info: tuple = Depends(get_authenticated_user)
+):
+    """Proxy an author image so OPDS clients do not need ABS credentials."""
+    _, token, _ = auth_info
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required for author images",
+            headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
+        )
+    return await _proxy_authenticated_image(
+        f"{AUDIOBOOKSHELF_API}/authors/{author_id}/image?format=jpeg", token
+    )
+
+
 @app.get("/opds/proxy/download/{item_id}/file/{file_ino}")
 async def proxy_download(
     item_id: str,

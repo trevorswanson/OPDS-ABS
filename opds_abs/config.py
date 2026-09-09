@@ -57,3 +57,7 @@ ITEMS_PER_PAGE = int(os.getenv("ITEMS_PER_PAGE", "25"))  # Default: 25 items per
 
 # Logging configuration
 LOG_LEVEL = os.environ.get("OPDS_LOG_LEVEL", "INFO").upper()
+
+# Uvicorn reload is useful for local development but causes continuous filesystem
+# polling in the container. Keep production/container startup idle by default.
+RELOAD_ENABLED = os.getenv("OPDS_RELOAD", "false").lower() == "true"

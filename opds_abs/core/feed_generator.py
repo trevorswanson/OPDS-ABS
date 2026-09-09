@@ -235,8 +235,8 @@ class BaseFeedGenerator:
                 download_path = f"/opds/proxy/download/{book_id}/file/{file_ino}"
                 logger.debug("Generated proxied download URL for '%s': %s", book_title, download_path)
 
-                # Cover URL doesn't need authentication
-                cover_url = f"{book_path}/cover?format=jpeg"
+                # Proxy covers through OPDS-ABS so clients do not need ABS credentials.
+                cover_url = f"/opds/proxy/cover/{book_id}"
                 series_list = book_metadata.get("seriesName", None)
                 added_at = datetime.fromtimestamp(book.get('addedAt')/1000).strftime('%Y-%m-%d')
 
