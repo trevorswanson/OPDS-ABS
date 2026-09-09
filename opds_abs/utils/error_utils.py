@@ -204,19 +204,18 @@ def handle_exception(
             status_code=code,
             content=error_detail
         )
-    else:
-        # Create simple XML error response
-        xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+    # Create simple XML error response
+    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <error xmlns="http://opds-spec.org/2010/catalog">
   <id>{error_id}</id>
   <message>{message}</message>
   {f"<context>{context}</context>" if context else ""}
 </error>"""
-        return Response(
-            content=xml_content,
-            media_type="application/xml",
-            status_code=code
-        )
+    return Response(
+        content=xml_content,
+        media_type="application/xml",
+        status_code=code
+    )
 
 
 def convert_to_http_exception(

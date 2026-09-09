@@ -192,7 +192,7 @@ async def lifespan(_app: FastAPI):
         logger.info("Loading cache from disk...")
         load_cache_from_disk()
     yield
-    """Save the cache to disk on application shutdown."""
+    # Save the cache to disk on application shutdown.
     if CACHE_PERSISTENCE_ENABLED:
         logger.info("Saving cache to disk...")
         save_cache_to_disk()
@@ -1060,8 +1060,6 @@ async def _proxy_authenticated_image(url: str, token: str) -> Response:
                 content = await upstream.read()
                 media_type = upstream.headers.get("Content-Type", "image/jpeg")
                 return Response(content=content, media_type=media_type)
-    except HTTPException:
-        raise
     except aiohttp.ClientError as exc:
         logger.error("Error proxying Audiobookshelf image: %s", str(exc))
         raise HTTPException(

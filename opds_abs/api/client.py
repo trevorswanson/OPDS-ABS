@@ -83,7 +83,7 @@ async def fetch_from_api(
         # If no token from cache and authentication is enabled, we have a problem
         if token is None and AUTH_ENABLED:
             logger.error("No cached token available for user %s", username)
-            raise AuthenticationError("No authentication token available for user %s" % username)
+            raise AuthenticationError(f"No authentication token available for user {username}")
 
     # If authentication is disabled, proceed without a token
     if not AUTH_ENABLED:
@@ -259,7 +259,7 @@ async def get_download_urls_from_item(
         logger.debug("Found %d ebook files for item %s", len(ebook_inos), item_id)
         return ebook_inos
     except Exception as e:
-        log_error(e, context="Getting download URLs for item %s" % item_id)
+        log_error(e, context=f"Getting download URLs for item {item_id}")
         return []
 
 
