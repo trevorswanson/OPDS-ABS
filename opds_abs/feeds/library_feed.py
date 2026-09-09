@@ -120,31 +120,16 @@ class LibraryFeedGenerator(BaseFeedGenerator):
 
         return self.create_response(feed)
 
-    async def generate_library_items_feed(self, username, library_id, params=None, token=None):
-        """Display all items in the library with optional filtering and sorting.
-
-        This method generates an OPDS feed containing all ebook items in a specific library.
-        It supports various filtering options including collection-based filtering and
-        different sort orders. The method optimizes performance by using cached data
-        for common view types like alphabetically sorted lists or recently added items.
+    @staticmethod
+    def _compute_pagination_numbers(params):
+        """Compute the start index, page size, and current page for a feed request.
 
         Args:
-            username (str): The username of the authenticated user who is accessing the feed.
-            library_id (str): ID of the library to fetch items from.
-            params (dict, optional): Query parameters for filtering and sorting. Supported keys:
-                - collection: ID of a collection to filter items by
-                - sort: Field to sort by (e.g., 'addedAt', 'media.metadata.title')
-                - desc: If present, sort in descending order
-                - filter: Additional filter criteria
-                - start_index: Start index for pagination (1-based, defaults to 1)
-            token (str, optional): Authentication token for Audiobookshelf API access.
+            params (dict): Query parameters for filtering and sorting.
 
         Returns:
-            Response: A FastAPI response object containing the XML OPDS feed with all
-                     matching ebook items from the library.
+            tuple: (start_index, items_per_page, no_pagination, page)
         """
-        params = params if params else {}
-
         # Extract pagination parameters
         try:
             start_index = int(params.get('start_index', 1))
@@ -166,6 +151,22 @@ class LibraryFeedGenerator(BaseFeedGenerator):
         # Current page calculation (1-based)
         page = 1 if no_pagination else ((start_index - 1) // items_per_page) + 1
 
+        return start_index, items_per_page, no_pagination, page
+
+    @staticmethod
+    def _build_current_paths(username, library_id, params, start_index, no_pagination):
+        """Build the pagination-aware path strings and stripped API params.
+
+        Args:
+            username (str): The username requesting the feed.
+            library_id (str): ID of the library being browsed.
+            params (dict): Query parameters for filtering and sorting.
+            start_index (int): The current start index.
+            no_pagination (bool): Whether pagination is disabled for this feed.
+
+        Returns:
+            tuple: (current_path, current_path_with_page, api_params)
+        """
         # Build current path for pagination links
         path_params = []
         for key, value in params.items():
@@ -188,109 +189,230 @@ class LibraryFeedGenerator(BaseFeedGenerator):
         # Make a copy of the params without the start_index for API requests
         api_params = {k: v for k, v in params.items() if k != 'start_index'}
 
-        # Check if we're filtering by collection using direct collection parameter
-        collection_id = params.get('collection')
+        return current_path, current_path_with_page, api_params
 
-        # If we're filtering by collection, fetch the collection data directly
-        if collection_id:
-            try:
-                # Directly fetch the collection with its books
-                collection_endpoint = f"/collections/{collection_id}"
-                collection_data = await fetch_from_api(
-                    collection_endpoint, username=username, token=token)
+    def _compute_pagination_context(self, username, library_id, token, params):
+        """Compute pagination bookkeeping shared by the library items feed helpers.
 
-                # Only proceed if we have collection data with books
-                if collection_data and collection_data.get("books"):
-                    collection_books = collection_data.get("books", [])
+        Args:
+            username (str): The username requesting the feed.
+            library_id (str): ID of the library being browsed.
+            token (str, optional): Authentication token for Audiobookshelf.
+            params (dict): Query parameters for filtering and sorting.
 
-                    # Filter books to only include those with ebookFile or ebookFormat
-                    filtered_books = []
-                    for book in collection_books:
-                        media = book.get("media", {})
-                        has_ebook = False
+        Returns:
+            dict: Request/pagination context (username, library_id, token,
+                start_index, items_per_page, no_pagination, page, api_params,
+                current_path, current_path_with_page).
+        """
+        start_index, items_per_page, no_pagination, page = self._compute_pagination_numbers(
+            params)
+        current_path, current_path_with_page, api_params = self._build_current_paths(
+            username, library_id, params, start_index, no_pagination)
 
-                        # Check for ebookFile
-                        if media.get("ebookFile") is not None:
-                            has_ebook = True
-                            # Set ebookFormat from the file extension when missing.
-                            if media.get("ebookFormat") is None:
-                                # Extract format from ebookFile extension or set a default
-                                ebook_file = media.get("ebookFile", {})
-                                if ebook_file and "metadata" in ebook_file:
-                                    ext = ebook_file.get("metadata", {}).get("ext", "").lstrip(".")
-                                    if ext:
-                                        # Set the ebookFormat for use in the feed
-                                        media["ebookFormat"] = ext
-                                    else:
-                                        # Default to epub if extension can't be determined
-                                        media["ebookFormat"] = "epub"
-                        # Also check for ebookFormat as a backup
-                        elif media.get("ebookFormat") is not None and media.get("ebookFormat"):
-                            has_ebook = True
+        return {
+            "username": username,
+            "library_id": library_id,
+            "token": token,
+            "start_index": start_index,
+            "items_per_page": items_per_page,
+            "no_pagination": no_pagination,
+            "page": page,
+            "api_params": api_params,
+            "current_path": current_path,
+            "current_path_with_page": current_path_with_page,
+        }
 
-                        if has_ebook:
-                            filtered_books.append(book)
+    @staticmethod
+    def _normalize_book_ebook_format(book):
+        """Determine if a collection book has an ebook, filling in a missing ebookFormat.
 
-                    if filtered_books:
-                        # Add sequence numbers for sorting
-                        for i, book in enumerate(filtered_books, 1):
-                            book["opds_seq"] = i
+        Mutates the book's media dict in place: when it has an ebookFile but no
+        ebookFormat, derives one from the file extension (or defaults to epub).
 
-                        # Sort the books
-                        sorted_books = self.sort_results(filtered_books)
+        Args:
+            book (dict): A book dict from the Audiobookshelf collection API.
 
-                        # Get total books count before pagination
-                        total_books = len(sorted_books)
+        Returns:
+            bool: True if the book has an ebook file or format.
+        """
+        media = book.get("media", {})
+        has_ebook = False
 
-                        # Apply pagination
-                        sorted_books = self.paginate_results(
-                            sorted_books, start_index, items_per_page)
+        # Check for ebookFile
+        if media.get("ebookFile") is not None:
+            has_ebook = True
+            # Set ebookFormat from the file extension when missing.
+            if media.get("ebookFormat") is None:
+                # Extract format from ebookFile extension or set a default
+                ebook_file = media.get("ebookFile", {})
+                if ebook_file and "metadata" in ebook_file:
+                    ext = ebook_file.get("metadata", {}).get("ext", "").lstrip(".")
+                    if ext:
+                        # Set the ebookFormat for use in the feed
+                        media["ebookFormat"] = ext
+                    else:
+                        # Default to epub if extension can't be determined
+                        media["ebookFormat"] = "epub"
+        # Also check for ebookFormat as a backup
+        elif media.get("ebookFormat") is not None and media.get("ebookFormat"):
+            has_ebook = True
 
-                        # Generate feed using these books directly
-                        feed = self.create_base_feed(
-                            username, library_id, current_path_with_page, token)
+        return has_ebook
 
-                        # Create feed metadata using dictionary approach
-                        feed_data = {
-                            "id": {"_text": library_id},
-                            "author": {
-                                "name": {"_text": "OPDS Audiobookshelf"}
-                            },
-                            "title": {
-                                "_text": (
-                                    f"{username}'s books in collection: "
-                                    f"{collection_data.get('name', 'Unknown')}"
-                                )
-                            }
-                        }
-                        dict_to_xml(feed, feed_data)
+    @staticmethod
+    async def _get_ebook_inos_for_books(books, username, token):
+        """Fetch ebook download info for each book concurrently.
 
-                        # Add pagination metadata and links
-                        if not no_pagination:
-                            self.add_pagination_metadata(feed, page, items_per_page, total_books)
-                            self.add_pagination_links(
-                                feed, current_path.rstrip('&?'), page,
-                                items_per_page, total_books, token=token)
+        Args:
+            books (list): Books to fetch ebook file info for.
+            username (str): The username of the authenticated user.
+            token (str, optional): Authentication token for Audiobookshelf.
 
-                        # Get ebook files for each book
-                        tasks = []
-                        for book in sorted_books:
-                            book_id = book.get("id", "")
-                            tasks.append(get_download_urls_from_item(
-                                book_id, username=username, token=token))
+        Returns:
+            list: Ebook file info lists, one per book, in the same order as `books`.
+        """
+        tasks = [
+            get_download_urls_from_item(book.get("id", ""), username=username, token=token)
+            for book in books
+        ]
+        return await asyncio.gather(*tasks)
 
-                        ebook_inos_list = await asyncio.gather(*tasks)
-                        for book, ebook_inos in zip(sorted_books, ebook_inos_list):
-                            self.add_book_to_feed(feed, book, ebook_inos,
-                                                  params.get('filter', ''), token=token)
+    def _finalize_collection_books(self, filtered_books, context):
+        """Sequence, sort, and paginate a collection's filtered books.
 
-                        return self.create_response(feed)
+        Args:
+            filtered_books (list): Books in the collection that have an ebook.
+            context (dict): Request/pagination context from _compute_pagination_context().
 
-            except Exception as e:
-                logger.error("Error processing collection data: %s", e)
-                traceback.print_exc()
+        Returns:
+            tuple: (paginated_books, total_books) - the page of books to render
+                and the total count before pagination.
+        """
+        # Add sequence numbers for sorting
+        for i, book in enumerate(filtered_books, 1):
+            book["opds_seq"] = i
 
-        # If not filtering by collection or collection processing failed, continue with normal flow
+        # Sort the books
+        sorted_books = self.sort_results(filtered_books)
+        total_books = len(sorted_books)
+
+        # Apply pagination
+        paginated_books = self.paginate_results(
+            sorted_books, context["start_index"], context["items_per_page"])
+
+        return paginated_books, total_books
+
+    async def _build_collection_feed_response(self, filtered_books, collection_data,
+                                              params, context):
+        """Build the OPDS feed response for a collection's filtered, sorted books.
+
+        Args:
+            filtered_books (list): Books in the collection that have an ebook.
+            collection_data (dict): The collection's data from the Audiobookshelf API.
+            params (dict): The original query parameters (used for the entry filter).
+            context (dict): Request/pagination context from _compute_pagination_context().
+
+        Returns:
+            Response: A FastAPI response object containing the XML OPDS feed.
+        """
+        username = context["username"]
+        token = context["token"]
+
+        sorted_books, total_books = self._finalize_collection_books(filtered_books, context)
+
+        # Generate feed using these books directly
+        feed = self.create_base_feed(
+            username, context["library_id"], context["current_path_with_page"], token)
+
+        # Create feed metadata using dictionary approach
+        feed_data = {
+            "id": {"_text": context["library_id"]},
+            "author": {
+                "name": {"_text": "OPDS Audiobookshelf"}
+            },
+            "title": {
+                "_text": (
+                    f"{username}'s books in collection: "
+                    f"{collection_data.get('name', 'Unknown')}"
+                )
+            }
+        }
+        dict_to_xml(feed, feed_data)
+
+        # Add pagination metadata and links
+        if not context["no_pagination"]:
+            self.add_pagination_metadata(
+                feed, context["page"], context["items_per_page"], total_books)
+            self.add_pagination_links(
+                feed, context["current_path"].rstrip('&?'), context["page"],
+                context["items_per_page"], total_books, token=token)
+
+        # Get ebook files for each book and add them to the feed
+        ebook_inos_list = await self._get_ebook_inos_for_books(sorted_books, username, token)
+        for book, ebook_inos in zip(sorted_books, ebook_inos_list):
+            self.add_book_to_feed(feed, book, ebook_inos,
+                                  params.get('filter', ''), token=token)
+
+        return self.create_response(feed)
+
+    async def _generate_collection_filtered_feed(self, collection_id, params, context):
+        """Try to build a feed of a single collection's books with ebooks.
+
+        Args:
+            collection_id (str): ID of the collection to filter by.
+            params (dict): The original query parameters (used for the entry filter).
+            context (dict): Request/pagination context from _compute_pagination_context().
+
+        Returns:
+            Response: The collection-filtered feed, or None if the collection has no
+                matching ebooks or an error occurred, so the caller should fall back
+                to the normal feed flow.
+        """
+        username = context["username"]
+        token = context["token"]
+
+        try:
+            # Directly fetch the collection with its books
+            collection_endpoint = f"/collections/{collection_id}"
+            collection_data = await fetch_from_api(
+                collection_endpoint, username=username, token=token)
+
+            # Only proceed if we have collection data with books
+            if collection_data and collection_data.get("books"):
+                collection_books = collection_data.get("books", [])
+
+                # Filter books to only include those with ebookFile or ebookFormat
+                filtered_books = [
+                    book for book in collection_books
+                    if self._normalize_book_ebook_format(book)
+                ]
+
+                if filtered_books:
+                    return await self._build_collection_feed_response(
+                        filtered_books, collection_data, params, context)
+
+        except Exception as e:
+            logger.error("Error processing collection data: %s", e)
+            traceback.print_exc()
+
+        return None
+
+    async def _get_library_items(self, params, context):
+        """Fetch the library's items, using cached data for special sort feeds.
+
+        Args:
+            params (dict): The original query parameters (used to detect special
+                sort feeds like "recent").
+            context (dict): Request/pagination context from _compute_pagination_context().
+
+        Returns:
+            list: The library items matching the requested filter/sort.
+        """
+        username = context["username"]
+        library_id = context["library_id"]
+        token = context["token"]
+
         # Determine if we're generating a standard feed or a special feed like "recent"
         sort_param = params.get('sort', '')
         desc_param = params.get('desc', '')
@@ -337,30 +459,47 @@ class LibraryFeedGenerator(BaseFeedGenerator):
                     key=lambda x: x.get('media', {}).get('metadata', {}).get('title', '').lower(),
                     reverse=False
                 )
-        else:
-            # For feeds with other filters or sorts, use the regular API call
-            logger.debug("Fetching library items from API with params: %s", params)
-            data = await fetch_from_api(
-                    f"/libraries/{library_id}/items",
-                    api_params,
-                    username=username,
-                    token=token
-            )
-            library_items = self.filter_items(data)
+            return library_items
+
+        # For feeds with other filters or sorts, use the regular API call
+        logger.debug("Fetching library items from API with params: %s", params)
+        data = await fetch_from_api(
+                f"/libraries/{library_id}/items",
+                context["api_params"],
+                username=username,
+                token=token
+        )
+        return self.filter_items(data)
+
+    async def _build_library_feed_response(self, params, context, library_items):
+        """Build the OPDS response for a page of plain library items.
+
+        Args:
+            params (dict): The original query parameters (used for the entry filter).
+            context (dict): Request/pagination context from _compute_pagination_context().
+            library_items (list): The (unpaginated) items to include in the feed.
+
+        Returns:
+            Response: A FastAPI response object containing the XML OPDS feed.
+        """
+        username = context["username"]
+        token = context["token"]
+        no_pagination = context["no_pagination"]
 
         # Get total count before pagination
         total_items = len(library_items)
 
         # Apply pagination
         paginated_items = library_items if no_pagination else self.paginate_results(
-            library_items, start_index, items_per_page)
+            library_items, context["start_index"], context["items_per_page"])
 
         # Create feed with pagination-aware path
-        feed = self.create_base_feed(username, library_id, current_path_with_page, token)
+        feed = self.create_base_feed(
+            username, context["library_id"], context["current_path_with_page"], token)
 
         # Create feed metadata using dictionary approach
         feed_data = {
-            "id": {"_text": library_id},
+            "id": {"_text": context["library_id"]},
             "author": {
                 "name": {"_text": "OPDS Audiobookshelf"}
             },
@@ -370,17 +509,53 @@ class LibraryFeedGenerator(BaseFeedGenerator):
 
         # Add pagination metadata and links
         if not no_pagination:
-            self.add_pagination_metadata(feed, page, items_per_page, total_items)
-            self.add_pagination_links(feed, current_path.rstrip('&?'),
-                                      page, items_per_page, total_items, token=token)
+            self.add_pagination_metadata(
+                feed, context["page"], context["items_per_page"], total_items)
+            self.add_pagination_links(
+                feed, context["current_path"].rstrip('&?'), context["page"],
+                context["items_per_page"], total_items, token=token)
 
-        tasks = []
-        for book in paginated_items:
-            book_id = book.get("id", "")
-            tasks.append(get_download_urls_from_item(book_id, username=username, token=token))
-
-        ebook_inos_list = await asyncio.gather(*tasks)
+        ebook_inos_list = await self._get_ebook_inos_for_books(paginated_items, username, token)
         for book, ebook_inos in zip(paginated_items, ebook_inos_list):
             self.add_book_to_feed(feed, book, ebook_inos, params.get('filter', ''), token=token)
 
         return self.create_response(feed)
+
+    async def generate_library_items_feed(self, username, library_id, params=None, token=None):
+        """Display all items in the library with optional filtering and sorting.
+
+        This method generates an OPDS feed containing all ebook items in a specific library.
+        It supports various filtering options including collection-based filtering and
+        different sort orders. The method optimizes performance by using cached data
+        for common view types like alphabetically sorted lists or recently added items.
+
+        Args:
+            username (str): The username of the authenticated user who is accessing the feed.
+            library_id (str): ID of the library to fetch items from.
+            params (dict, optional): Query parameters for filtering and sorting. Supported keys:
+                - collection: ID of a collection to filter items by
+                - sort: Field to sort by (e.g., 'addedAt', 'media.metadata.title')
+                - desc: If present, sort in descending order
+                - filter: Additional filter criteria
+                - start_index: Start index for pagination (1-based, defaults to 1)
+            token (str, optional): Authentication token for Audiobookshelf API access.
+
+        Returns:
+            Response: A FastAPI response object containing the XML OPDS feed with all
+                     matching ebook items from the library.
+        """
+        params = params if params else {}
+        context = self._compute_pagination_context(username, library_id, token, params)
+
+        # If we're filtering by collection, try to build a collection-specific feed
+        collection_id = params.get('collection')
+        if collection_id:
+            collection_response = await self._generate_collection_filtered_feed(
+                collection_id, params, context)
+            if collection_response is not None:
+                return collection_response
+
+        # If not filtering by collection or collection processing failed, continue with normal flow
+        library_items = await self._get_library_items(params, context)
+
+        return await self._build_library_feed_response(params, context, library_items)
