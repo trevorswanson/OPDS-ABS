@@ -61,9 +61,9 @@ def _create_cache_key(endpoint: str, params: Optional[Dict] = None, username: Op
 
     # Create a hash of the components
     key_str = "".join(components)
-    # Cache keys need deterministic collision resistance, not password hashing.
-    # SHA-256 also avoids security scanners treating this as credential hashing.
-    return hashlib.sha256(key_str.encode()).hexdigest()
+    # This is a deterministic cache identifier, not password hashing. The
+    # explicit flag documents that the digest is not used for security.
+    return hashlib.sha256(key_str.encode(), usedforsecurity=False).hexdigest()
 
 
 def load_cache_from_disk() -> None:
@@ -258,7 +258,8 @@ def cached(expiry: int = DEFAULT_CACHE_EXPIRY) -> Callable:
             kwargs_str = json.dumps(kwargs, sort_keys=True) if kwargs else "{}"
 
             cache_key = hashlib.sha256(
-                f"{func_name}:{args_str}:{kwargs_str}".encode()
+                f"{func_name}:{args_str}:{kwargs_str}".encode(),
+                usedforsecurity=False,
             ).hexdigest()
 
             # Try to get from cache
