@@ -84,7 +84,8 @@ Relevant configuration files:
 - `.pydocstyle`: Google convention and project exclusions.
 - `.pre-commit-config.yaml`: pydocstyle, whitespace/EOF/YAML/large-file
   checks, and the repository docstring checker.
-- `setup.cfg`: Flake8 line length (100), exclusions, and docstring settings.
+- `ruff.toml`: Ruff line length (100), exclusions, and docstring settings
+  (replaces flake8/flake8-docstrings).
 - `.pylintrc`: Pylint defaults and Python version assumptions.
 
 ## Required validation
@@ -123,7 +124,7 @@ GitHub Actions workflows live in `.github/workflows/`:
 
 - `quality.yml` runs regression tests, Python compilation, pre-commit, Compose
   validation, and a Docker build on `dev`/`master` pushes and pull requests.
-  Its Flake8/Pylint job is advisory and uploads reports without blocking the
+  Its Ruff/Pylint job is advisory and uploads reports without blocking the
   other quality gates.
 - `docstring-check.yml` runs documentation checks for Python changes.
 - `docker-image-dev.yml` builds and publishes the `dev` image as
@@ -133,7 +134,7 @@ GitHub Actions workflows live in `.github/workflows/`:
 - `docker-image.yml` builds and publishes `ghcr.io/trevorswanson/opds-abs:latest`
   from `master`.
 
-Flake8 and Pylint are development dependencies but are not required CI gates
+Ruff and Pylint are development dependencies but are not required CI gates
 yet. The inherited codebase has a large existing warning/error baseline, and
 the current Pylint configuration contains an option unsupported by newer
 Pylint releases. Coverage is measured and uploaded by the Python quality job;

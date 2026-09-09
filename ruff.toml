@@ -1,0 +1,29 @@
+# Ruff configuration.
+#
+# Replaces flake8 + flake8-docstrings + pydocstyle's CI role (see
+# `setup.cfg`'s now-removed `[flake8]` section). Mirrors the same line
+# length, exclusions, and Google-style docstring convention.
+
+line-length = 100
+
+extend-exclude = [
+    "build",
+    "dist",
+    "venv",
+]
+
+[lint]
+# E/W: pycodestyle, F: pyflakes, D: pydocstyle (flake8-docstrings equivalent).
+select = ["E", "F", "W", "D"]
+ignore = [
+    "E203",  # whitespace before ':' - conflicts with black-style slicing
+]
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.per-file-ignores]
+# Don't require docstrings in __init__.py files.
+"*/__init__.py" = ["D104"]
+# Don't require docstrings in tests.
+"tests/*" = ["D100", "D101", "D102", "D103"]
