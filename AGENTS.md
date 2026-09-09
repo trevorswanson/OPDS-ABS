@@ -125,9 +125,10 @@ Basic authentication challenge.
 GitHub Actions workflows live in `.github/workflows/`:
 
 - `docstring-check.yml` runs documentation checks for Python changes.
-- `docker-image-dev.yml` is the inherited dev image workflow.
-- `build-dev-image.yml` is the maintained fork workflow for `dev`, publishing
+- `docker-image-dev.yml` builds and publishes the `dev` image as
   `ghcr.io/trevorswanson/opds-abs:dev-<short-sha>`.
+- Keep this as the single dev-image workflow; do not add a duplicate workflow
+  with the same trigger and output tag.
 - `docker-image.yml` builds and publishes `ghcr.io/trevorswanson/opds-abs:latest`
   from `master`.
 
