@@ -128,7 +128,8 @@ class SearchFeedGenerator(BaseFeedGenerator):
             return self._create_empty_search_feed(username, library_id, query)
 
         # Get search data and library items from cache or API
-        search_data = await get_cached_search_results(fetch_from_api, username, library_id, query, token=token)
+        search_data = await get_cached_search_results(
+            fetch_from_api, username, library_id, query, token=token)
         cached_library_items = await get_cached_library_items(
             fetch_from_api,
             self.filter_items,
@@ -143,8 +144,10 @@ class SearchFeedGenerator(BaseFeedGenerator):
 
         # Process books, series, and authors separately
         await self._process_books(feed, search_data, username, library_id, token)
-        await self._process_series(feed, search_data, username, library_id, cached_library_items, token)
-        await self._process_authors(feed, search_data, username, library_id, cached_library_items, token)
+        await self._process_series(
+            feed, search_data, username, library_id, cached_library_items, token)
+        await self._process_authors(
+            feed, search_data, username, library_id, cached_library_items, token)
 
         return self.create_response(feed)
 
@@ -256,7 +259,9 @@ class SearchFeedGenerator(BaseFeedGenerator):
         media = lib_item.get("media", {})
         return bool(media.get("ebookFile", media.get("ebookFormat", None)))
 
-    async def _process_series(self, feed, search_data, username, library_id, cached_library_items, token=None):
+    async def _process_series(
+            self, feed, search_data, username, library_id,
+            cached_library_items, token=None):
         """Process series search results and add them to the feed.
 
         Args:
@@ -361,13 +366,18 @@ class SearchFeedGenerator(BaseFeedGenerator):
                     most_common = series_author_map[series_id]["most_common"]
                     current_count = series_author_map[series_id]["authors"][author_name]
 
-                    if most_common is None or current_count > series_author_map[series_id]["authors"].get(most_common, 0):
+                    if (
+                            most_common is None
+                            or current_count > series_author_map[series_id]["authors"].get(
+                                most_common, 0)
+                    ):
                         series_author_map[series_id]["most_common"] = author_name
 
         return series_author_map
 
-    async def _add_series_to_feed(self, series, series_generator, series_author_map, cached_library_items,
-                                  feed, username, library_id, token=None):
+    async def _add_series_to_feed(
+            self, series, series_generator, series_author_map, cached_library_items,
+            feed, username, library_id, token=None):
         """Add a single series to the feed with author information.
 
         Args:
@@ -454,7 +464,9 @@ class SearchFeedGenerator(BaseFeedGenerator):
         # Return default if all attempts failed
         return "Unknown Author"
 
-    async def _process_authors(self, feed, search_data, username, library_id, cached_library_items, token=None):
+    async def _process_authors(
+            self, feed, search_data, username, library_id,
+            cached_library_items, token=None):
         """Process author search results and add them to the feed.
 
         Args:
@@ -540,10 +552,10 @@ class SearchFeedGenerator(BaseFeedGenerator):
         """Add a single author to the feed with ebook count information.
 
         Args:
-            author_generator (AuthorFeedGenerator): Generator instance to handle adding author entries.
+            author_generator (AuthorFeedGenerator): Generator for author entries.
             author_name (str): Name of the author to add to the feed.
             ebook_count (int): Number of ebooks by this author available in the library.
-            author_data_by_name (dict): Dictionary mapping author names to their complete data objects.
+            author_data_by_name (dict): Mapping of author names to data objects.
             feed: The XML feed object to add the author entry to.
             username (str): The username of the authenticated user.
             library_id (str): ID of the library being searched.
