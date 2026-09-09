@@ -493,6 +493,7 @@ async def search_xml(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             target = f"/opds/{display_name}/libraries/{library_id}/search.xml"
             target = target.replace("\\", "")
@@ -503,14 +504,15 @@ async def search_xml(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            return RedirectResponse(
-                url=f"/opds/{username}/libraries/{library_id}/search.xml"
-            )
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         params = dict(request.query_params)
         return templates.TemplateResponse("search.xml", {
             "request": request,
-            "username": display_name if auth_username else username,
+            "username": effective_username,
             "library_id": library_id,
             "searchTerms": params.get('q', ''),
             "token": token  # Add token to the template context
@@ -539,6 +541,7 @@ async def opds_root(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             target = f"/opds/{display_name}"
             target = target.replace("\\", "")
@@ -549,10 +552,10 @@ async def opds_root(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            return RedirectResponse(url=f"/opds/{username}")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         return await library_feed.generate_root_feed(
             effective_username,
@@ -587,6 +590,7 @@ async def opds_nav(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             target = f"/opds/{display_name}/libraries/{library_id}"
             target = target.replace("\\", "")
@@ -597,10 +601,10 @@ async def opds_nav(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            return RedirectResponse(url=f"/opds/{username}/libraries/{library_id}")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         return await navigation_feed.generate_navigation_feed(
             effective_username,
@@ -638,6 +642,7 @@ async def opds_search(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             # Preserve search parameters in the redirect
             params_str = "&".join([f"{k}={v}" for k, v in request.query_params.items()])
@@ -652,13 +657,10 @@ async def opds_search(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            fallback_url = f"/opds/{username}/libraries/{library_id}/search"
-            if params_str:
-                fallback_url += f"?{params_str}"
-            return RedirectResponse(url=fallback_url)
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         params = dict(request.query_params)
         return await search_feed.generate_search_feed(
@@ -705,6 +707,7 @@ async def opds_library(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             # Preserve query parameters in the redirect
             params_str = "&".join([f"{k}={v}" for k, v in request.query_params.items()])
@@ -719,13 +722,10 @@ async def opds_library(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            fallback_url = f"/opds/{username}/libraries/{library_id}/items"
-            if params_str:
-                fallback_url += f"?{params_str}"
-            return RedirectResponse(url=fallback_url)
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         params = dict(request.query_params)
 
@@ -768,6 +768,7 @@ async def opds_series(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             target = f"/opds/{display_name}/libraries/{library_id}/series"
             target = target.replace("\\", "")
@@ -778,10 +779,10 @@ async def opds_series(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            return RedirectResponse(url=f"/opds/{username}/libraries/{library_id}/series")
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         return await series_feed.generate_series_feed(
             effective_username,
@@ -828,6 +829,7 @@ async def opds_series_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             target = f"/opds/{display_name}/libraries/{library_id}/series/{series_id}"
             target = target.replace("\\", "")
@@ -838,12 +840,10 @@ async def opds_series_items(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            return RedirectResponse(
-                url=f"/opds/{username}/libraries/{library_id}/series/{series_id}"
-            )
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         return await series_feed.generate_series_items_feed(
             effective_username,
@@ -883,6 +883,7 @@ async def opds_collections(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             target = f"/opds/{display_name}/libraries/{library_id}/collections"
             target = target.replace("\\", "")
@@ -893,12 +894,10 @@ async def opds_collections(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            return RedirectResponse(
-                url=f"/opds/{username}/libraries/{library_id}/collections"
-            )
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         return await collection_feed.generate_collections_feed(
             effective_username,
@@ -936,6 +935,7 @@ async def opds_collection_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             target = (
                 f"/opds/{display_name}/libraries/{library_id}/"
@@ -949,15 +949,10 @@ async def opds_collection_items(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            return RedirectResponse(
-                url=(
-                    f"/opds/{username}/libraries/{library_id}/"
-                    f"collections/{collection_id}"
-                )
-            )
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         return await collection_feed.generate_collection_items_feed(
             effective_username,
@@ -997,6 +992,7 @@ async def opds_authors(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             target = f"/opds/{display_name}/libraries/{library_id}/authors"
             target = target.replace("\\", "")
@@ -1007,12 +1003,10 @@ async def opds_authors(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            return RedirectResponse(
-                url=f"/opds/{username}/libraries/{library_id}/authors"
-            )
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         return await author_feed.generate_authors_feed(
             effective_username,
@@ -1050,6 +1044,7 @@ async def opds_author_items(
         auth_username, token, display_name = auth_info
 
         # Ensure this is the authenticated user's feed or authentication is disabled
+        effective_username = display_name if auth_username else username
         if AUTH_ENABLED and auth_username and username != display_name:
             target = f"/opds/{display_name}/libraries/{library_id}/authors/{author_id}"
             target = target.replace("\\", "")
@@ -1060,12 +1055,10 @@ async def opds_author_items(
                 # display_name's contents.
                 # codeql[py/url-redirection]
                 return RedirectResponse(url=target)
-            return RedirectResponse(
-                url=f"/opds/{username}/libraries/{library_id}/authors/{author_id}"
-            )
-
-        # Use the display name from authentication if available
-        effective_username = display_name if auth_username else username
+            # display_name failed validation; fail closed by serving the
+            # already-routed (framework-constrained) username instead of
+            # building another redirect target out of further request data.
+            effective_username = username
 
         return await author_feed.generate_author_items_feed(
             effective_username,
