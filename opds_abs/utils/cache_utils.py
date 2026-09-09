@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Cache dictionary: key -> (timestamp, data)
 _cache: Dict[str, Tuple[float, Any]] = {}
-_last_save_time = 0
+LAST_SAVE_TIME = 0
 _cache_lock = threading.RLock()
 
 
@@ -136,7 +136,7 @@ def save_cache_to_disk() -> None:
         pickle.PickleError: If there is an error pickling the cache data.
         IOError: If there is an error writing to the cache file.
     """
-    global _last_save_time
+    global LAST_SAVE_TIME
 
     if not CACHE_PERSISTENCE_ENABLED:
         return
@@ -146,7 +146,7 @@ def save_cache_to_disk() -> None:
     # Use a lock to prevent concurrent access during save
     with _cache_lock:
         # Only save if enough time has passed since last save
-        if current_time - _last_save_time < CACHE_SAVE_INTERVAL:
+        if current_time - LAST_SAVE_TIME < CACHE_SAVE_INTERVAL:
             return
 
         # Clean expired items before saving
@@ -159,7 +159,7 @@ def save_cache_to_disk() -> None:
             del _cache[key]
 
         # Update last save time
-        _last_save_time = current_time
+        LAST_SAVE_TIME = current_time
 
     try:
         cache_path = Path(CACHE_FILE_PATH)
@@ -215,7 +215,7 @@ def cache_set(key: str, data: Any) -> None:
         _cache[key] = (time.time(), data)
 
     # Schedule background save if enough time has passed
-    if CACHE_PERSISTENCE_ENABLED and time.time() - _last_save_time >= CACHE_SAVE_INTERVAL:
+    if CACHE_PERSISTENCE_ENABLED and time.time() - LAST_SAVE_TIME >= CACHE_SAVE_INTERVAL:
         # Use a thread to save the cache without blocking
         threading.Thread(target=save_cache_to_disk, daemon=True).start()
 

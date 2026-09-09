@@ -243,11 +243,11 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                         book_id, username=username, token=token))
 
             # Process in batches if we have a lot of books
-            BATCH_SIZE = 5  # Adjust based on server capacity
+            batch_size = 5  # Adjust based on server capacity
 
             # Process all books on the current page
-            for i in range(0, len(tasks), BATCH_SIZE):
-                batch_tasks = tasks[i:i+BATCH_SIZE]
+            for i in range(0, len(tasks), batch_size):
+                batch_tasks = tasks[i:i+batch_size]
                 batch_results = await asyncio.gather(*batch_tasks)
 
                 # Add each book from this batch to the feed
