@@ -5,3 +5,6 @@ __pycache__/
 
 # Runtime cache
 opds_abs/data/cache.pkl
+
+# Coverage reports
+.coverage
