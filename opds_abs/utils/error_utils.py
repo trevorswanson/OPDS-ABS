@@ -36,6 +36,8 @@ from fastapi.responses import Response, JSONResponse
 logger = logging.getLogger(__name__)
 
 # Custom exception classes
+
+
 class OPDSBaseException(Exception):
     """Base exception for all OPDS-ABS specific exceptions.
 
@@ -57,25 +59,30 @@ class OPDSBaseException(Exception):
     status_code = 500
     default_message = "An internal server error occurred"
 
+
 class ResourceNotFoundError(OPDSBaseException):
     """Raised when a requested resource is not found."""
     status_code = 404
     default_message = "Resource not found"
+
 
 class AuthenticationError(OPDSBaseException):
     """Raised when authentication fails."""
     status_code = 401
     default_message = "Authentication failed"
 
+
 class APIClientError(OPDSBaseException):
     """Raised when there's an error communicating with Audiobookshelf."""
     status_code = 502
     default_message = "Error communicating with Audiobookshelf"
 
+
 class FeedGenerationError(OPDSBaseException):
     """Raised when there's an error generating a feed."""
     status_code = 500
     default_message = "Error generating feed"
+
 
 class CacheError(OPDSBaseException):
     """Raised when there's an error with the cache."""
@@ -83,6 +90,8 @@ class CacheError(OPDSBaseException):
     default_message = "Cache operation failed"
 
 # Error handling functions
+
+
 def handle_exception(
     exc: Exception,
     context: str = "",
@@ -209,6 +218,7 @@ def handle_exception(
             status_code=code
         )
 
+
 def convert_to_http_exception(
     exc: Exception,
     status_code: Optional[int] = None,
@@ -235,6 +245,7 @@ def convert_to_http_exception(
         message = detail or str(exc) or "An unexpected error occurred"
 
     return HTTPException(status_code=code, detail=message)
+
 
 def log_error(
     exc: Exception,

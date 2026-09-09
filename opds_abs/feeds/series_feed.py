@@ -14,6 +14,7 @@ from opds_abs.utils.error_utils import log_error, handle_exception
 # Set up logging
 logger = logging.getLogger(__name__)
 
+
 class SeriesFeedGenerator(BaseFeedGenerator):
     """Generator for series feed.
 
@@ -193,11 +194,13 @@ class SeriesFeedGenerator(BaseFeedGenerator):
                 if item.get("id") in series_book_ids:
                     filtered_items.append(item)
 
-            logger.debug("Found %d matching items in cache for series %s", len(filtered_items), series_name)
+            logger.debug("Found %d matching items in cache for series %s",
+                         len(filtered_items), series_name)
 
             # If no matching items were found in the cache, try the fallback method
             if not filtered_items:
-                logger.warning("No matching items found in cache for series %s. Trying API fallback.", series_name)
+                logger.warning(
+                    "No matching items found in cache for series %s. Trying API fallback.", series_name)
                 params = {"filter": f"series.{self.create_filter(series_id)}"}
                 data = await fetch_from_api(
                         f"/libraries/{library_id}/items",
@@ -210,7 +213,8 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             # Sort by series sequence number if available
             sorted_items = sorted(
                 filtered_items,
-                key=lambda x: x.get('media', {}).get('metadata', {}).get('series', {}).get('sequence', 0)
+                key=lambda x: x.get('media', {}).get(
+                    'metadata', {}).get('series', {}).get('sequence', 0)
             )
 
             # Get the most common author from the series items
@@ -328,10 +332,12 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             # But let's ensure they are sorted correctly just to be safe
             sorted_library_items = sorted(
                 library_items,
-                key=lambda x: float(x.get('media', {}).get('metadata', {}).get('series', {}).get('sequence', 0))
+                key=lambda x: float(x.get('media', {}).get(
+                    'metadata', {}).get('series', {}).get('sequence', 0))
             )
 
-            logger.debug("Sorted %d items by sequence number for %s", len(sorted_library_items), series_name)
+            logger.debug("Sorted %d items by sequence number for %s",
+                         len(sorted_library_items), series_name)
 
             # Get ebook files for each book
             tasks = []
@@ -415,7 +421,8 @@ class SeriesFeedGenerator(BaseFeedGenerator):
                 for item in library_items:
                     if item.get("id") == first_book_id:
                         # Use media.metadata.authorName from the library item
-                        raw_author_name = item.get('media', {}).get('metadata', {}).get('authorName')
+                        raw_author_name = item.get('media', {}).get(
+                            'metadata', {}).get('authorName')
                         break
             except Exception as e:
                 logger.error("Error checking library items for book ID %s: %s", first_book_id, e)
@@ -431,8 +438,8 @@ class SeriesFeedGenerator(BaseFeedGenerator):
         content_text = raw_author_name
         # Format the content based on the source
         if from_search_feed:
-                content_text = f"Series by {raw_author_name}"
-                logger.debug("Adding series to feed from search: %s", content_text)
+            content_text = f"Series by {raw_author_name}"
+            logger.debug("Adding series to feed from search: %s", content_text)
 
         # Use the direct series route instead of query parameters
         series_id = series.get('id')

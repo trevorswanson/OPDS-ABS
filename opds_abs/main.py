@@ -83,6 +83,8 @@ from opds_abs.utils.error_utils import (
 )
 
 # Define custom formatter to match uvicorn's style exactly
+
+
 class ColorFormatter(logging.Formatter):
     """Custom log formatter that adds ANSI color codes to log levels.
 
@@ -94,9 +96,9 @@ class ColorFormatter(logging.Formatter):
     COLORS = {
         "DEBUG": "\033[36m",  # Cyan
         "INFO": "\033[32m",   # Green
-        "WARNING": "\033[33m", # Yellow
+        "WARNING": "\033[33m",  # Yellow
         "ERROR": "\033[31m",   # Red
-        "CRITICAL": "\033[1;31m", # Bold Red
+        "CRITICAL": "\033[1;31m",  # Bold Red
         "RESET": "\033[0m"     # Reset
     }
 
@@ -118,6 +120,7 @@ class ColorFormatter(logging.Formatter):
             levelname_color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
             record.levelprefix = f"{levelname_color}{record.levelname}{self.COLORS['RESET']}:{spaces}"
         return super().format(record)
+
 
 # Set up logging for the entire application
 logging.basicConfig(
@@ -154,6 +157,8 @@ author_feed = AuthorFeedGenerator()
 search_feed = SearchFeedGenerator()
 
 # Create startup and shutdown sequences for loading cache
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load the cache from disk on application startup and log configuration."""
@@ -176,7 +181,8 @@ async def lifespan(app: FastAPI):
     if PAGINATION_ENABLED:
         logger.info(f"Pagination: {PAGINATION_ENABLED} (Items per page: {ITEMS_PER_PAGE})")
     else:
-        logger.info(f"Pagination: {PAGINATION_ENABLED} (Disabled - all items will be shown in feeds)")
+        logger.info(
+            f"Pagination: {PAGINATION_ENABLED} (Disabled - all items will be shown in feeds)")
 
     logger.info(f"Log Level: {LOG_LEVEL}")
 
@@ -208,6 +214,8 @@ if CACHE_PERSISTENCE_ENABLED:
     atexit.register(save_cache_to_disk)
 
 # Custom exception handler for OPDS exceptions
+
+
 @app.exception_handler(OPDSBaseException)
 async def opds_exception_handler(request: Request, exc: OPDSBaseException):
     """Handle custom OPDS exceptions using our error handling utilities.
@@ -223,6 +231,8 @@ async def opds_exception_handler(request: Request, exc: OPDSBaseException):
     return handle_exception(exc, context=context)
 
 # Custom exception handler for API connectivity errors
+
+
 @app.exception_handler(APIClientError)
 async def api_client_error_handler(request: Request, exc: APIClientError):
     """Handle API connectivity errors gracefully with OPDS-compliant XML error format.
@@ -276,6 +286,8 @@ async def api_client_error_handler(request: Request, exc: APIClientError):
     )
 
 # Custom exception handler for authentication errors
+
+
 @app.exception_handler(AuthenticationError)
 async def authentication_error_handler(request: Request, exc: AuthenticationError):
     """Handle authentication errors with OPDS-compliant XML error format.
@@ -328,6 +340,8 @@ async def authentication_error_handler(request: Request, exc: AuthenticationErro
     )
 
 # Custom exception handler for 503 Service Unavailable errors
+
+
 @app.exception_handler(503)
 async def service_unavailable_handler(request: Request, exc: HTTPException):
     """Handle Service Unavailable errors with OPDS-compliant XML format.
@@ -363,6 +377,8 @@ async def service_unavailable_handler(request: Request, exc: HTTPException):
     )
 
 # Fall back to standard HTTPException handling for other exceptions
+
+
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
     """Custom handler for HTTPExceptions that logs them before handling.
@@ -377,6 +393,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     context = f"{request.method} {request.url.path}"
     log_error(exc, context=context, log_traceback=False)
     return await http_exception_handler(request, exc)
+
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
@@ -393,7 +410,7 @@ def index(request: Request):
     except Exception as e:
         log_error(e, context="Rendering index page")
         raise convert_to_http_exception(e, status_code=500,
-            detail="Failed to render index page") from e
+                                        detail="Failed to render index page") from e
 
 
 @app.get("/opds", response_class=RedirectResponse)
@@ -465,7 +482,7 @@ async def search_xml(
     except Exception as e:
         log_error(e, context=f"Rendering search XML for user {username}, library {library_id}")
         raise convert_to_http_exception(e, status_code=500,
-            detail="Failed to render search template") from e
+                                        detail="Failed to render search template") from e
 
 
 @app.get("/opds/{username}")
@@ -945,14 +962,15 @@ async def get_cache_stats(auth_info: tuple = Depends(require_auth)):
         if stats["entries"]:
             stats["oldest_entry_age"] = max(entry["age_seconds"] for entry in stats["entries"])
             stats["newest_entry_age"] = min(entry["age_seconds"] for entry in stats["entries"])
-            stats["average_entry_age"] = sum(entry["age_seconds"] for entry in stats["entries"]) / len(stats["entries"])
+            stats["average_entry_age"] = sum(entry["age_seconds"]
+                                             for entry in stats["entries"]) / len(stats["entries"])
             stats["total_size_estimate"] = sum(entry["size_estimate"] for entry in stats["entries"])
 
         return JSONResponse(content=stats)
     except Exception as e:
         log_error(e, context="Getting cache statistics")
         raise convert_to_http_exception(e, status_code=500,
-            detail="Error retrieving cache statistics") from e
+                                        detail="Error retrieving cache statistics") from e
 
 
 @app.post("/admin/cache/clear")
@@ -1015,7 +1033,8 @@ async def _proxy_authenticated_image(url: str, token: str) -> Response:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as upstream:
                 if upstream.status in (401, 403):
-                    raise HTTPException(status_code=401, detail="Audiobookshelf image authentication failed")
+                    raise HTTPException(
+                        status_code=401, detail="Audiobookshelf image authentication failed")
                 if upstream.status == 404:
                     raise HTTPException(status_code=404, detail="Image not found")
                 upstream.raise_for_status()
@@ -1026,7 +1045,8 @@ async def _proxy_authenticated_image(url: str, token: str) -> Response:
         raise
     except aiohttp.ClientError as exc:
         logger.error("Error proxying Audiobookshelf image: %s", str(exc))
-        raise HTTPException(status_code=502, detail="Unable to fetch image from Audiobookshelf") from exc
+        raise HTTPException(
+            status_code=502, detail="Unable to fetch image from Audiobookshelf") from exc
 
 
 @app.get("/opds/proxy/cover/{item_id}")
@@ -1117,7 +1137,8 @@ async def proxy_download(
             try:
                 async with session.get(url, headers=headers) as response:
                     response.raise_for_status()
-                    logger.debug("Received successful response from Audiobookshelf API with status %s", response.status)
+                    logger.debug(
+                        "Received successful response from Audiobookshelf API with status %s", response.status)
 
                     # Stream the response content
                     async for chunk in response.content.iter_any():
@@ -1140,7 +1161,8 @@ async def proxy_download(
                     head_response.raise_for_status()
 
                     # Get content type for proper MIME type handling
-                    content_type = head_response.headers.get("Content-Type", "application/octet-stream")
+                    content_type = head_response.headers.get(
+                        "Content-Type", "application/octet-stream")
 
                     # Set the same headers we received from Audiobookshelf
                     for header_name, header_value in head_response.headers.items():

@@ -64,17 +64,21 @@ class XmlAndErrorTests(unittest.TestCase):
 
         self.assertEqual(data, original)
         self.assertEqual(root.find("entry").get("id"), "book-1")
-        self.assertEqual([link.get("href") for link in root.findall("entry/link")], ["/one", "/two"])
+        self.assertEqual([link.get("href")
+                         for link in root.findall("entry/link")], ["/one", "/two"])
 
     def test_error_helpers_return_expected_formats_and_statuses(self):
-        xml_response = handle_exception(ResourceNotFoundError("missing"), context="lookup", log_traceback=False)
-        json_response = handle_exception(AuthenticationError("bad login"), return_json=True, log_traceback=False)
+        xml_response = handle_exception(ResourceNotFoundError(
+            "missing"), context="lookup", log_traceback=False)
+        json_response = handle_exception(AuthenticationError(
+            "bad login"), return_json=True, log_traceback=False)
 
         self.assertEqual(xml_response.status_code, 404)
         self.assertIn(b"<message>missing</message>", xml_response.body)
         self.assertEqual(json_response.status_code, 401)
         self.assertEqual(json.loads(json_response.body)["message"], "bad login")
-        self.assertEqual(convert_to_http_exception(APIClientError("upstream"), status_code=504).status_code, 504)
+        self.assertEqual(convert_to_http_exception(
+            APIClientError("upstream"), status_code=504).status_code, 504)
 
 
 class CacheTests(unittest.TestCase):
@@ -123,17 +127,20 @@ class AuthTests(unittest.IsolatedAsyncioTestCase):
     def test_basic_bearer_and_query_credentials_are_parsed(self):
         basic = base64.b64encode(b"alice:secret").decode()
         self.assertEqual(
-            auth_utils.get_credentials_from_request(make_request(headers={"Authorization": f"Basic {basic}"})),
+            auth_utils.get_credentials_from_request(
+                make_request(headers={"Authorization": f"Basic {basic}"})),
             ("alice", "secret", None),
         )
         self.assertEqual(
             auth_utils.get_credentials_from_request(
-                make_request(headers={"Authorization": "Bearer token"}, query_string=b"username=alice")
+                make_request(headers={"Authorization": "Bearer token"},
+                             query_string=b"username=alice")
             ),
             ("alice", None, "token"),
         )
         self.assertEqual(
-            auth_utils.get_credentials_from_request(make_request(query_string=b"token=key&username=alice")),
+            auth_utils.get_credentials_from_request(
+                make_request(query_string=b"token=key&username=alice")),
             ("alice", None, "key"),
         )
 
@@ -236,7 +243,8 @@ class FeedGeneratorTests(unittest.TestCase):
         ]}
         filtered = self.generator.filter_items(data)
         self.assertEqual([item["id"] for item in filtered], ["1", "3"])
-        self.assertEqual([item["id"] for item in self.generator.paginate_results(filtered, 2, 1)], ["3"])
+        self.assertEqual([item["id"]
+                         for item in self.generator.paginate_results(filtered, 2, 1)], ["3"])
         self.assertEqual(self.generator.extract_value({"a": {"b": 2}}, "a.b"), 2)
         self.assertEqual(self.generator.create_filter("series"), "c2VyaWVz")
 
@@ -291,7 +299,8 @@ class FeedAndRouteTests(unittest.IsolatedAsyncioTestCase):
         async def fake_proxy(url, token):
             return main.Response(content=b"image", media_type="image/jpeg")
 
-        main.app.dependency_overrides[main.get_authenticated_user] = lambda: ("alice", "token", "Alice")
+        main.app.dependency_overrides[main.get_authenticated_user] = lambda: (
+            "alice", "token", "Alice")
         try:
             with patch.object(main, "_proxy_authenticated_image", side_effect=fake_proxy) as proxy:
                 with TestClient(main.app) as test_client:

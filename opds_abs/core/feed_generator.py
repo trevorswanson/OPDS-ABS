@@ -30,6 +30,7 @@ FORMAT_TO_MIMETYPE = {
     "cb7":  "application/x-cb7",
 }
 
+
 class BaseFeedGenerator:
     """Base class for creating OPDS feed components.
 
@@ -217,7 +218,8 @@ class BaseFeedGenerator:
                     logger.debug("Using token from ebook file for book '%s'", book_title)
 
             # Log detailed information about the book and token
-            logger.debug("Adding book to feed: '%s' (ID: %s), token present: %s", book_title, book_id, effective_token is not None)
+            logger.debug("Adding book to feed: '%s' (ID: %s), token present: %s",
+                         book_title, book_id, effective_token is not None)
 
             # Extract ebook format - check both direct and nested paths (for search results)
             ebook_format = media.get("ebookFormat", media.get("ebookFile", {}).get("ebookFormat"))
@@ -229,7 +231,8 @@ class BaseFeedGenerator:
                 # Use our proxy endpoint instead of direct Audiobookshelf API link
                 # No need to append token as query parameter since our proxy handles authentication
                 download_path = f"/opds/proxy/download/{book_id}/file/{file_ino}"
-                logger.debug("Generated proxied download URL for '%s': %s", book_title, download_path)
+                logger.debug("Generated proxied download URL for '%s': %s",
+                             book_title, download_path)
 
                 # Proxy covers through OPDS-ABS so clients do not need ABS credentials.
                 cover_url = f"/opds/proxy/cover/{book_id}"
@@ -342,7 +345,7 @@ class BaseFeedGenerator:
             for result in data.get("results", []):
                 media = result.get("media", {})
                 if "ebookFormat" in media and media.get("ebookFormat", None):
-                    result.update({"opds_seq":n})
+                    result.update({"opds_seq": n})
                     n += 1
                     filtered_results.append(result)
 
@@ -408,13 +411,15 @@ class BaseFeedGenerator:
         start_index = (page - 1) * items_per_page + 1  # OpenSearch is 1-indexed
 
         # Add opensearch elements
-        items_per_page_el = etree.SubElement(feed, "{http://a9.com/-/spec/opensearch/1.1/}itemsPerPage")
+        items_per_page_el = etree.SubElement(
+            feed, "{http://a9.com/-/spec/opensearch/1.1/}itemsPerPage")
         items_per_page_el.text = str(items_per_page)
 
         start_index_el = etree.SubElement(feed, "{http://a9.com/-/spec/opensearch/1.1/}startIndex")
         start_index_el.text = str(start_index)
 
-        total_results_el = etree.SubElement(feed, "{http://a9.com/-/spec/opensearch/1.1/}totalResults")
+        total_results_el = etree.SubElement(
+            feed, "{http://a9.com/-/spec/opensearch/1.1/}totalResults")
         total_results_el.text = str(total_items)
 
     def add_pagination_links(self, feed, current_path, page, items_per_page, total_items, token=None):

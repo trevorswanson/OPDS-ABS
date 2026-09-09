@@ -11,6 +11,7 @@ from opds_abs.utils import dict_to_xml
 # Set up logging
 logger = logging.getLogger(__name__)
 
+
 class NavigationFeedGenerator(BaseFeedGenerator):
     """Generator for navigation feed.
 
@@ -118,7 +119,7 @@ class NavigationFeedGenerator(BaseFeedGenerator):
             for nav in navigation:
                 # Set up navigation item paths and URLs
                 base_path = f"/opds/{username}/libraries/{library_id}/"
-                nav_params = nav.get('params','')
+                nav_params = nav.get('params', '')
 
                 # Add authentication token to nav_params if available
                 if token and nav_params:

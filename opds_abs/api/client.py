@@ -36,6 +36,7 @@ CACHE_EXPIRY_MAPPING = {
     "/collections": COLLECTIONS_CACHE_EXPIRY,
 }
 
+
 async def fetch_from_api(
     endpoint: str,
     params: Dict[str, Any] = None,
@@ -76,7 +77,8 @@ async def fetch_from_api(
         else:
             # Try to get from the TOKEN_CACHE
             token = get_token_for_username(username)
-            logger.debug("Token from cache for user %s: %s", username, 'Found' if token else 'Not found')
+            logger.debug("Token from cache for user %s: %s",
+                         username, 'Found' if token else 'Not found')
 
         # If no token from cache and authentication is enabled, we have a problem
         if token is None and AUTH_ENABLED:
@@ -124,10 +126,10 @@ async def fetch_from_api(
         async with aiohttp.ClientSession(timeout=timeout) as session:
             try:
                 async with session.get(
-                        url,
-                        params=params,
-                        headers=headers
-                    ) as response:
+                            url,
+                            params=params,
+                            headers=headers
+                        ) as response:
                     response.raise_for_status()
                     data = await response.json()
 
@@ -147,7 +149,8 @@ async def fetch_from_api(
                 # Check if this might be an authentication error
                 if resp_error.status in (401, 403):
                     token_info = "Token present" if token else "No token"
-                    logger.error("Authentication error (%s) for %s: %s", token_info, url, str(resp_error))
+                    logger.error("Authentication error (%s) for %s: %s",
+                                 token_info, url, str(resp_error))
 
                     # Invalidate token cache on auth errors to force re-authentication
                     if username and username in TOKEN_CACHE:
@@ -165,7 +168,7 @@ async def fetch_from_api(
         # This happens when the server is down or unreachable - log as ERROR but without traceback
         error_id = id(conn_error)
         logger.error("ERROR [%s]: Cannot connect to Audiobookshelf server at %s (API endpoint: %s)",
-                    error_id, AUDIOBOOKSHELF_API, endpoint)
+                     error_id, AUDIOBOOKSHELF_API, endpoint)
 
         # Check if we have cached data we can use as a fallback
         if not bypass_cache:
@@ -190,6 +193,7 @@ async def fetch_from_api(
         raise APIClientError(
             f"Error communicating with Audiobookshelf API: {str(e)}"
         ) from e
+
 
 @cached(expiry=LIBRARY_ITEMS_CACHE_EXPIRY)
 async def get_download_urls_from_item(
@@ -217,12 +221,14 @@ async def get_download_urls_from_item(
     """
     try:
         # Log authentication information for debugging
-        logger.debug("Getting download URLs for item %s, username: %s, token present: %s", item_id, username, token is not None)
+        logger.debug("Getting download URLs for item %s, username: %s, token present: %s",
+                     item_id, username, token is not None)
 
         if token is None and username:
             cached_token = get_token_for_username(username)
             token = cached_token  # Use the cached token if available
-            logger.debug("No token provided for download, using cached token: %s", cached_token is not None)
+            logger.debug("No token provided for download, using cached token: %s",
+                         cached_token is not None)
 
         item = await fetch_from_api(f"/items/{item_id}", username=username, token=token)
         ebook_inos = []
@@ -235,13 +241,15 @@ async def get_download_urls_from_item(
                     "token":        token  # Store the token with the file info
                 }
                 ebook_inos.append(file_info)
-                logger.debug("Found ebook file: %s (ino: %s)", file_info['filename'], file_info['ino'])
+                logger.debug("Found ebook file: %s (ino: %s)",
+                             file_info['filename'], file_info['ino'])
 
         logger.debug("Found %d ebook files for item %s", len(ebook_inos), item_id)
         return ebook_inos
     except Exception as e:
         log_error(e, context="Getting download URLs for item %s" % item_id)
         return []
+
 
 def invalidate_cache(endpoint: str = None, params: dict = None, username: str = None):
     """Invalidate cache for a specific endpoint or item.
