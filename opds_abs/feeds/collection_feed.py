@@ -399,8 +399,6 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             FeedGenerationError: If there's an error adding the collection to the feed.
         """
         try:
-            # Default cover and collection details
-            cover_url = "/static/images/collections.png"
             collection_id = collection.get("id", "")
             collection_name = collection.get("name", "Unknown collection name")
 
@@ -416,50 +414,15 @@ class CollectionFeedGenerator(BaseFeedGenerator):
 
             # Get the book count for the entry content
             book_count = len(books_with_ebooks)
-
-            # Find a cover image from the first book with an ID
-            if books_with_ebooks:
-                for book in books_with_ebooks:
-                    book_id = book.get("id")
-                    if book_id:
-                        cover_url = f"/opds/proxy/cover/{book_id}"
-                        break
+            cover_url = self._get_collection_ebook_cover(books_with_ebooks)
 
             # Add token to the collection link if provided
             collection_link = f"/opds/{username}/libraries/{library_id}/collections/{collection_id}"
             if token:
                 collection_link = f"{collection_link}?token={token}"
 
-            # Create entry data structure
-            entry_data = {
-                "entry": {
-                    "title": {"_text": collection_name},
-                    "id": {"_text": collection_id},
-                    "updated": {"_text": self.get_current_timestamp()},
-                    "content": {
-                        "_text": (
-                            f"Collection with {book_count} "
-                            f"ebook{'s' if book_count != 1 else ''}"
-                        )
-                    },
-                    "link": [
-                        {
-                            "_attrs": {
-                                "href": collection_link,
-                                "rel": "subsection",
-                                "type": "application/atom+xml;profile=opds-catalog"
-                            }
-                        },
-                        {
-                            "_attrs": {
-                                "href": cover_url,
-                                "rel": "http://opds-spec.org/image",
-                                "type": "image/jpeg"
-                            }
-                        }
-                    ]
-                }
-            }
+            entry_data = self._build_collection_entry_data(
+                collection_name, collection_id, book_count, collection_link, cover_url)
 
             # Convert dictionary to XML elements
             dict_to_xml(feed, entry_data)
@@ -473,6 +436,67 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             log_error(e, context=context)
             raise FeedGenerationError(
                 f"Unexpected error adding collection to feed: {str(e)}") from e
+
+    @staticmethod
+    def _get_collection_ebook_cover(books_with_ebooks):
+        """Find the cover image URL for the first collection book with an ID.
+
+        Args:
+            books_with_ebooks (list): Books in the collection that have an ebook.
+
+        Returns:
+            str: The cover proxy URL for the first book found, or the default
+                collections icon if none have an ID.
+        """
+        for book in books_with_ebooks:
+            book_id = book.get("id")
+            if book_id:
+                return f"/opds/proxy/cover/{book_id}"
+        return "/static/images/collections.png"
+
+    def _build_collection_entry_data(self, collection_name, collection_id, book_count,
+                                     collection_link, cover_url):
+        """Build the OPDS entry dict for a collection.
+
+        Args:
+            collection_name (str): The collection's display name.
+            collection_id (str): The collection's ID.
+            book_count (int): Number of ebooks in the collection.
+            collection_link (str): The link to the collection's items feed.
+            cover_url (str): The cover image URL for the entry.
+
+        Returns:
+            dict: The entry data structure ready for dict_to_xml().
+        """
+        return {
+            "entry": {
+                "title": {"_text": collection_name},
+                "id": {"_text": collection_id},
+                "updated": {"_text": self.get_current_timestamp()},
+                "content": {
+                    "_text": (
+                        f"Collection with {book_count} "
+                        f"ebook{'s' if book_count != 1 else ''}"
+                    )
+                },
+                "link": [
+                    {
+                        "_attrs": {
+                            "href": collection_link,
+                            "rel": "subsection",
+                            "type": "application/atom+xml;profile=opds-catalog"
+                        }
+                    },
+                    {
+                        "_attrs": {
+                            "href": cover_url,
+                            "rel": "http://opds-spec.org/image",
+                            "type": "image/jpeg"
+                        }
+                    }
+                ]
+            }
+        }
 
     async def generate_collections_feed(self, username, library_id, token=None):
         """Generate an OPDS feed listing all collections in a library.
@@ -505,51 +529,8 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             dict_to_xml(feed, feed_data)
 
             # Filter collections to only include those with books that have ebook files
-            filtered_collections = []
-            collection_errors = []
-
-            for collection in collections:
-                # We need to fetch each collection's books separately
-                collection_id = collection.get("id", "")
-                if collection_id:
-                    try:
-                        collection_data = await fetch_from_api(
-                            f"/collections/{collection_id}",
-                            username=username,
-                            token=token,
-                        )
-
-                        # Check if there are ebooks in this collection and count them
-                        ebook_count = 0
-                        for book in collection_data.get("books", []):
-                            media = book.get("media", {})
-                            if (
-                                    media.get("ebookFile") is not None
-                                    or (
-                                        media.get("ebookFormat") is not None
-                                        and media.get("ebookFormat")
-                                    )
-                            ):
-                                ebook_count += 1
-
-                        if ebook_count > 0:
-                            logger.debug("Collection \"%s\" has %d ebooks",
-                                         collection_data.get('name'), ebook_count)
-                            filtered_collections.append(collection_data)
-                    except ResourceNotFoundError as e:
-                        context = f"Fetching collection {collection_id}"
-                        log_error(e, context=context, log_traceback=False)
-                        collection_errors.append(
-                            f"Collection {collection.get('name', collection_id)}: {str(e)}")
-                    except Exception as e:
-                        context = f"Fetching collection {collection_id}"
-                        log_error(e, context=context)
-                        collection_errors.append(
-                            f"Collection {collection.get('name', collection_id)}: {str(e)}")
-
-            # Sort collections by name
-            filtered_collections = sorted(
-                filtered_collections, key=lambda x: x.get("name", "").lower())
+            filtered_collections, collection_errors = await self._get_collections_with_ebooks(
+                username, collections, token)
 
             # Add each collection to the feed
             for collection in filtered_collections:
@@ -590,6 +571,81 @@ class CollectionFeedGenerator(BaseFeedGenerator):
 
             # Use handle_exception to return a standardized error response
             return handle_exception(e, context=context)
+
+    @staticmethod
+    def _count_collection_ebooks(collection_data):
+        """Count how many books in a collection have an ebook file or format.
+
+        Args:
+            collection_data (dict): A collection's data from the Audiobookshelf API.
+
+        Returns:
+            int: The number of books with an ebook.
+        """
+        ebook_count = 0
+        for book in collection_data.get("books", []):
+            media = book.get("media", {})
+            if (
+                    media.get("ebookFile") is not None
+                    or (
+                        media.get("ebookFormat") is not None
+                        and media.get("ebookFormat")
+                    )
+            ):
+                ebook_count += 1
+        return ebook_count
+
+    async def _get_collections_with_ebooks(self, username, collections, token):
+        """Fetch each collection's books and keep only those containing an ebook.
+
+        Args:
+            username (str): The username requesting the feed.
+            collections (list): The raw collection list from get_collections().
+            token (str, optional): Authentication token for Audiobookshelf.
+
+        Returns:
+            tuple: (filtered_collections, collection_errors) - full collection
+                data (with books) for collections that have at least one ebook,
+                sorted by name, and a list of human-readable error strings for
+                collections that could not be fetched.
+        """
+        filtered_collections = []
+        collection_errors = []
+
+        for collection in collections:
+            # We need to fetch each collection's books separately
+            collection_id = collection.get("id", "")
+            if not collection_id:
+                continue
+
+            try:
+                collection_data = await fetch_from_api(
+                    f"/collections/{collection_id}",
+                    username=username,
+                    token=token,
+                )
+
+                ebook_count = self._count_collection_ebooks(collection_data)
+                if ebook_count > 0:
+                    logger.debug("Collection \"%s\" has %d ebooks",
+                                 collection_data.get('name'), ebook_count)
+                    filtered_collections.append(collection_data)
+            except ResourceNotFoundError as e:
+                context = f"Fetching collection {collection_id}"
+                log_error(e, context=context, log_traceback=False)
+                collection_errors.append(
+                    f"Collection {collection.get('name', collection_id)}: {str(e)}")
+            except Exception as e:
+                context = f"Fetching collection {collection_id}"
+                log_error(e, context=context)
+                collection_errors.append(
+                    f"Collection {collection.get('name', collection_id)}: {str(e)}")
+
+        # Sort collections by name
+        filtered_collections = sorted(
+            filtered_collections, key=lambda x: x.get("name", "").lower())
+
+        return filtered_collections, collection_errors
 
     async def get_collections(self, username, library_id, token=None):
         """Fetch all collections available in a library.
