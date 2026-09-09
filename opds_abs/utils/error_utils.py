@@ -170,7 +170,10 @@ def handle_exception(
         message = exc.detail
     else:
         code = 500
-        message = str(exc) or "An unexpected error occurred"
+        # Don't leak internal exception details (which can include things like
+        # file paths or stack-trace text) to clients for unexpected errors.
+        # The real message is still logged in full below.
+        message = "An unexpected error occurred"
 
     # Override status code if provided
     if status_code is not None:
@@ -183,10 +186,11 @@ def handle_exception(
     if context:
         log_prefix += f" in {context}"
 
+    log_message = str(exc) or message
     if log_traceback:
-        logger.exception("%s: %s", log_prefix, message)
+        logger.exception("%s: %s", log_prefix, log_message)
     else:
-        logger.error("%s: %s", log_prefix, message)
+        logger.error("%s: %s", log_prefix, log_message)
 
     # Create error response
     error_detail = {
