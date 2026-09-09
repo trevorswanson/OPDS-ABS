@@ -221,6 +221,127 @@ async def authenticate_with_audiobookshelf(
     return await _login_with_password(username, password)
 
 
+async def _try_api_me(session: aiohttp.ClientSession, api_key: str) -> Optional[Tuple[str, str]]:
+    """Try the /api/me endpoint to verify an API key (newer Audiobookshelf versions).
+
+    Args:
+        session: The session to issue the request on.
+        api_key: The API key to verify.
+
+    Returns:
+        Tuple of (token, display_name) on success, else None to signal the
+        caller should fall back to /api/authorize.
+    """
+    verify_url = f"{AUDIOBOOKSHELF_INTERNAL_URL}/api/me"
+    logger.debug("Making API request to: %s", verify_url)
+    logger.debug("With Bearer token authentication")
+
+    # The API key is used as the Bearer token for this request
+    async with session.get(
+        verify_url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        },
+        timeout=5  # Short timeout for faster detection of server issues
+    ) as response:
+        if response.status != 200:
+            error_text = await response.text()
+            logger.warning(
+                "API key authentication failed on /api/me: Status %s - %s",
+                response.status, error_text)
+            # Don't raise an exception yet, try the older method
+            return None
+
+        data = await response.json()
+        logger.debug("API response data: %s", data)
+
+        if data and "user" in data:
+            user_data = data.get("user", {})
+            token = api_key  # In Audiobookshelf, the API key IS the token
+            actual_username = user_data.get("username", "")
+            display_name = actual_username
+
+            logger.info(
+                "Successfully authenticated with API key for user: %s",
+                actual_username)
+            return token, display_name
+
+    return None
+
+
+async def _try_api_authorize(
+        session: aiohttp.ClientSession, api_key: str, username: str) -> Tuple[str, str]:
+    """Try the /api/authorize endpoint (GET, then POST) to verify an API key.
+
+    Legacy fallback for Audiobookshelf versions where /api/me doesn't work.
+
+    Args:
+        session: The session to issue the request on.
+        api_key: The API key to verify.
+        username: Username the caller expects the key to belong to; used only
+            to warn on a mismatch and as the placeholder value to replace.
+
+    Returns:
+        Tuple of (token, display_name)
+
+    Raises:
+        AuthenticationError: If all authorize attempts fail or return an
+            invalid response.
+    """
+    logger.debug("Trying fallback authentication with /api/authorize")
+    authorize_url = f"{AUDIOBOOKSHELF_INTERNAL_URL}/api/authorize"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    async with session.get(authorize_url, headers=headers, timeout=5) as response:
+        if response.status != 200:
+            error_text = await response.text()
+            logger.warning(
+                "API key authentication failed on /api/authorize: Status %s - %s",
+                response.status, error_text)
+
+            # If both methods fail, try one more legacy approach
+            # Some older versions might use POST instead of GET
+            async with session.post(authorize_url, headers=headers, timeout=5) as post_response:
+                if post_response.status != 200:
+                    error_text = await post_response.text()
+                    logger.warning(
+                        "API key authentication failed on POST /api/authorize: "
+                        "Status %s - %s", post_response.status, error_text)
+                    raise AuthenticationError(
+                        "API key authentication failed with all methods")
+
+                data = await post_response.json()
+                logger.debug("API response data (POST): %s", data)
+        else:
+            data = await response.json()
+            logger.debug("API response data (GET): %s", data)
+
+        if not data or "user" not in data:
+            raise AuthenticationError("Invalid response from Audiobookshelf")
+
+        user_data = data.get("user", {})
+        token = api_key  # In Audiobookshelf, the API key IS the token
+        actual_username = user_data.get("username", "")
+        display_name = actual_username
+
+        # If username was provided and doesn't match, log a warning.
+        if username not in ("api_key_user", actual_username):
+            logger.warning("API key belongs to user '%s', not '%s'",
+                           actual_username, username)
+
+        # Always use the actual username from Audiobookshelf
+        username = actual_username
+
+        # Cache the token with the correct username
+        TOKEN_CACHE[username] = (token, display_name)
+
+        return token, display_name
+
+
 async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, str]:
     """Authenticate with Audiobookshelf using an API key.
 
@@ -236,109 +357,17 @@ async def authenticate_with_api_key(username: str, api_key: str) -> Tuple[str, s
     """
     logger.debug("Authenticating with API key for user: %s", username)
 
-    # First try the /api/me endpoint (works for newer versions of Audiobookshelf)
-    verify_url = f"{AUDIOBOOKSHELF_INTERNAL_URL}/api/me"
-
     try:
         async with aiohttp.ClientSession() as session:
             try:
-                # Log what we're about to do
-                logger.debug("Making API request to: %s", verify_url)
-                logger.debug("With Bearer token authentication")
-
-                # The API key is used as the Bearer token for this request
-                async with session.get(
-                    verify_url,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    timeout=5  # Short timeout for faster detection of server issues
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.warning(
-                            "API key authentication failed on /api/me: Status %s - %s",
-                            response.status, error_text)
-                        # Don't raise an exception yet, try the older method
-                    else:
-                        data = await response.json()
-                        logger.debug("API response data: %s", data)
-
-                        if data and "user" in data:
-                            user_data = data.get("user", {})
-                            token = api_key  # In Audiobookshelf, the API key IS the token
-                            actual_username = user_data.get("username", "")
-                            display_name = actual_username
-
-                            logger.info(
-                                "Successfully authenticated with API key for user: %s",
-                                actual_username)
-                            return token, display_name
+                # First try the /api/me endpoint (works for newer Audiobookshelf versions)
+                result = await _try_api_me(session, api_key)
+                if result is not None:
+                    return result
 
                 # If we get here, /api/me didn't work. Try /api/authorize as fallback
                 # Some versions of Audiobookshelf use this endpoint instead
-                logger.debug("Trying fallback authentication with /api/authorize")
-                authorize_url = f"{AUDIOBOOKSHELF_INTERNAL_URL}/api/authorize"
-
-                async with session.get(
-                    authorize_url,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    timeout=5
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.warning(
-                            "API key authentication failed on /api/authorize: Status %s - %s",
-                            response.status, error_text)
-
-                        # If both methods fail, try one more legacy approach
-                        # Some older versions might use POST instead of GET
-                        async with session.post(
-                            authorize_url,
-                            headers={
-                                "Authorization": f"Bearer {api_key}",
-                                "Content-Type": "application/json"
-                            },
-                            timeout=5
-                        ) as post_response:
-                            if post_response.status != 200:
-                                error_text = await post_response.text()
-                                logger.warning(
-                                    "API key authentication failed on POST /api/authorize: "
-                                    "Status %s - %s", post_response.status, error_text)
-                                raise AuthenticationError(
-                                    "API key authentication failed with all methods")
-
-                            data = await post_response.json()
-                            logger.debug("API response data (POST): %s", data)
-                    else:
-                        data = await response.json()
-                        logger.debug("API response data (GET): %s", data)
-
-                    if not data or "user" not in data:
-                        raise AuthenticationError("Invalid response from Audiobookshelf")
-
-                    user_data = data.get("user", {})
-                    token = api_key  # In Audiobookshelf, the API key IS the token
-                    actual_username = user_data.get("username", "")
-                    display_name = actual_username
-
-                    # If username was provided and doesn't match, log a warning.
-                    if username not in ("api_key_user", actual_username):
-                        logger.warning("API key belongs to user '%s', not '%s'",
-                                       actual_username, username)
-
-                    # Always use the actual username from Audiobookshelf
-                    username = actual_username
-
-                    # Cache the token with the correct username
-                    TOKEN_CACHE[username] = (token, display_name)
-
-                    return token, display_name
+                return await _try_api_authorize(session, api_key, username)
             except aiohttp.ClientConnectorError as conn_error:
                 error_id = id(conn_error)
                 logger.error("ERROR [%s]: Cannot connect to Audiobookshelf server at %s",
