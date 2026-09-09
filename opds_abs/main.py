@@ -166,27 +166,27 @@ async def lifespan(_app: FastAPI):
     """Load the cache from disk on application startup and log configuration."""
     # Log configuration settings
     logger.info("Starting OPDS-ABS with configuration:")
-    logger.info(f"Audiobookshelf URL: {AUDIOBOOKSHELF_INTERNAL_URL}")
-    logger.info(f"Audiobookshelf Internal URL: {AUDIOBOOKSHELF_INTERNAL_URL}")
-    logger.info(f"Audiobookshelf External URL: {AUDIOBOOKSHELF_EXTERNAL_URL}")
-    logger.info(f"Authentication Enabled: {AUTH_ENABLED}")
+    logger.info("Audiobookshelf URL: %s", AUDIOBOOKSHELF_INTERNAL_URL)
+    logger.info("Audiobookshelf Internal URL: %s", AUDIOBOOKSHELF_INTERNAL_URL)
+    logger.info("Audiobookshelf External URL: %s", AUDIOBOOKSHELF_EXTERNAL_URL)
+    logger.info("Authentication Enabled: %s", AUTH_ENABLED)
     if API_KEY_AUTH_ENABLED:
         logger.info("API key authentication is enabled")
     else:
         logger.info("API key authentication is disabled")
     if not API_KEY_AUTH_ENABLED:
         logger.warning("API Key Authentication is DISABLED. Only username/password will work.")
-    logger.info(f"Auth Token Caching: {AUTH_TOKEN_CACHING}")
-    logger.info(f"Cache Persistence Enabled: {CACHE_PERSISTENCE_ENABLED}")
+    logger.info("Auth Token Caching: %s", AUTH_TOKEN_CACHING)
+    logger.info("Cache Persistence Enabled: %s", CACHE_PERSISTENCE_ENABLED)
 
     # Log pagination settings
     if PAGINATION_ENABLED:
-        logger.info(f"Pagination: {PAGINATION_ENABLED} (Items per page: {ITEMS_PER_PAGE})")
+        logger.info("Pagination: %s (Items per page: %s)", PAGINATION_ENABLED, ITEMS_PER_PAGE)
     else:
         logger.info(
-            f"Pagination: {PAGINATION_ENABLED} (Disabled - all items will be shown in feeds)")
+            "Pagination: %s (Disabled - all items will be shown in feeds)", PAGINATION_ENABLED)
 
-    logger.info(f"Log Level: {LOG_LEVEL}")
+    logger.info("Log Level: %s", LOG_LEVEL)
 
     if CACHE_PERSISTENCE_ENABLED:
         logger.info("Loading cache from disk...")
