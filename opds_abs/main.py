@@ -56,7 +56,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.exception_handlers import http_exception_handler
 
 # Local application imports
-from opds_abs.config import LOG_LEVEL, AUTH_ENABLED, CACHE_PERSISTENCE_ENABLED, AUDIOBOOKSHELF_API
+from opds_abs.config import (
+    LOG_LEVEL, AUTH_ENABLED, CACHE_PERSISTENCE_ENABLED, AUDIOBOOKSHELF_API,
+    AUDIOBOOKSHELF_INTERNAL_URL, AUDIOBOOKSHELF_EXTERNAL_URL,
+    API_KEY_AUTH_ENABLED, AUTH_TOKEN_CACHING,
+    PAGINATION_ENABLED, ITEMS_PER_PAGE
+)
 from opds_abs.feeds.library_feed import LibraryFeedGenerator
 from opds_abs.feeds.navigation_feed import NavigationFeedGenerator
 from opds_abs.feeds.series_feed import SeriesFeedGenerator
@@ -151,7 +156,30 @@ search_feed = SearchFeedGenerator()
 # Create startup and shutdown sequences for loading cache
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the cache from disk on application startup."""
+    """Load the cache from disk on application startup and log configuration."""
+    # Log configuration settings
+    logger.info("Starting OPDS-ABS with configuration:")
+    logger.info(f"Audiobookshelf URL: {AUDIOBOOKSHELF_INTERNAL_URL}")
+    logger.info(f"Audiobookshelf Internal URL: {AUDIOBOOKSHELF_INTERNAL_URL}")
+    logger.info(f"Audiobookshelf External URL: {AUDIOBOOKSHELF_EXTERNAL_URL}")
+    logger.info(f"Authentication Enabled: {AUTH_ENABLED}")
+    if API_KEY_AUTH_ENABLED:
+        logger.info("API key authentication is enabled")
+    else:
+        logger.info("API key authentication is disabled")
+    if not API_KEY_AUTH_ENABLED:
+        logger.warning("API Key Authentication is DISABLED. Only username/password will work.")
+    logger.info(f"Auth Token Caching: {AUTH_TOKEN_CACHING}")
+    logger.info(f"Cache Persistence Enabled: {CACHE_PERSISTENCE_ENABLED}")
+
+    # Log pagination settings
+    if PAGINATION_ENABLED:
+        logger.info(f"Pagination: {PAGINATION_ENABLED} (Items per page: {ITEMS_PER_PAGE})")
+    else:
+        logger.info(f"Pagination: {PAGINATION_ENABLED} (Disabled - all items will be shown in feeds)")
+
+    logger.info(f"Log Level: {LOG_LEVEL}")
+
     if CACHE_PERSISTENCE_ENABLED:
         logger.info("Loading cache from disk...")
         load_cache_from_disk()
@@ -976,6 +1004,65 @@ async def invalidate_specific_cache(
     except Exception as e:
         log_error(e, context=f"Invalidating cache for {endpoint}")
         raise CacheError(f"Failed to invalidate cache for {endpoint}") from e
+
+
+async def _proxy_authenticated_image(url: str, token: str) -> Response:
+    """Fetch an Audiobookshelf image using the authenticated OPDS token."""
+    import aiohttp
+
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as upstream:
+                if upstream.status in (401, 403):
+                    raise HTTPException(status_code=401, detail="Audiobookshelf image authentication failed")
+                if upstream.status == 404:
+                    raise HTTPException(status_code=404, detail="Image not found")
+                upstream.raise_for_status()
+                content = await upstream.read()
+                media_type = upstream.headers.get("Content-Type", "image/jpeg")
+                return Response(content=content, media_type=media_type)
+    except HTTPException:
+        raise
+    except aiohttp.ClientError as exc:
+        logger.error("Error proxying Audiobookshelf image: %s", str(exc))
+        raise HTTPException(status_code=502, detail="Unable to fetch image from Audiobookshelf") from exc
+
+
+@app.get("/opds/proxy/cover/{item_id}")
+async def proxy_cover(
+    item_id: str,
+    auth_info: tuple = Depends(get_authenticated_user)
+):
+    """Proxy a book cover so OPDS clients do not need ABS credentials."""
+    _, token, _ = auth_info
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required for covers",
+            headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
+        )
+    return await _proxy_authenticated_image(
+        f"{AUDIOBOOKSHELF_API}/items/{item_id}/cover?format=jpeg", token
+    )
+
+
+@app.get("/opds/proxy/author-image/{author_id}")
+async def proxy_author_image(
+    author_id: str,
+    auth_info: tuple = Depends(get_authenticated_user)
+):
+    """Proxy an author image so OPDS clients do not need ABS credentials."""
+    _, token, _ = auth_info
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required for author images",
+            headers={"WWW-Authenticate": "Basic realm=\"OPDS-ABS\""}
+        )
+    return await _proxy_authenticated_image(
+        f"{AUDIOBOOKSHELF_API}/authors/{author_id}/image?format=jpeg", token
+    )
 
 
 @app.get("/opds/proxy/download/{item_id}/file/{file_ino}")

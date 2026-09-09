@@ -1,0 +1,106 @@
+name: Quality
+
+on:
+  push:
+    branches: [ "master", "dev" ]
+  pull_request:
+    branches: [ "master", "dev" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-analysis:
+    name: Advisory Flake8 and Pylint
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install development dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run Flake8 advisory scan
+        run: |
+          set +e
+          flake8 . --output-file=flake8-report.txt
+          status=$?
+          printf 'Flake8 exit status: %s\n' "$status" | tee -a flake8-report.txt
+          exit 0
+
+      - name: Run Pylint advisory scan
+        run: |
+          set +e
+          pylint opds_abs run.py > pylint-report.txt 2>&1
+          status=$?
+          printf '\nPylint exit status: %s\n' "$status" | tee -a pylint-report.txt
+          exit 0
+
+      - name: Upload static-analysis reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-analysis-reports
+          path: |
+            flake8-report.txt
+            pylint-report.txt
+          retention-days: 14
+
+  python-quality:
+    name: Python tests and repository checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install development dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run regression tests with coverage
+        run: |
+          coverage run --source=opds_abs -m unittest discover -s tests -v
+          coverage report -m
+          coverage xml
+
+      - name: Upload coverage report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 14
+
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Run pre-commit checks
+        run: pre-commit run --all-files
+
+  container-quality:
+    name: Build and validate container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: docker compose config -q
+
+      - name: Build container image
+        run: docker build --tag opds-abs:ci .

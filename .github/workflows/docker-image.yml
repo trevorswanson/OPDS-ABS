@@ -9,6 +9,9 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout repository
@@ -19,13 +22,17 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.CR_PAT }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set outputs
+        id: vars
+        run: |
+          echo "repo_lowercase=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
 
       - name: Build Docker image
-  run: |
-    docker build . -t ghcr.io/${{ github.repository_owner }}/opds-abs:latest
+        run: |
+          docker build . -t ghcr.io/${{ steps.vars.outputs.repo_lowercase }}:latest
 
-- name: Push Docker image
-  run: |
-    docker push ghcr.io/${{ github.repository_owner }}/opds-abs:latest
-
+      - name: Push Docker image
+        run: |
+          docker push ghcr.io/${{ steps.vars.outputs.repo_lowercase }}:latest

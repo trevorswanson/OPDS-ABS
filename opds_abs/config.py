@@ -7,13 +7,34 @@ environment variables.
 import os
 import pathlib
 
-# Load configuration from environment variables
-AUDIOBOOKSHELF_URL = os.getenv("AUDIOBOOKSHELF_URL", "http://localhost:13378")
-AUDIOBOOKSHELF_API = AUDIOBOOKSHELF_URL + "/api"
+# Legacy and fallback logic for Audiobookshelf URLs
+_abs_url = os.getenv("AUDIOBOOKSHELF_URL")
+_abs_internal = os.getenv("AUDIOBOOKSHELF_INTERNAL_URL")
+_abs_external = os.getenv("AUDIOBOOKSHELF_EXTERNAL_URL")
+
+if _abs_url:
+	# Legacy: use AUDIOBOOKSHELF_URL for both
+	AUDIOBOOKSHELF_INTERNAL_URL = _abs_url
+	AUDIOBOOKSHELF_EXTERNAL_URL = _abs_url
+elif _abs_internal and not _abs_external:
+	AUDIOBOOKSHELF_INTERNAL_URL = _abs_internal
+	AUDIOBOOKSHELF_EXTERNAL_URL = _abs_internal
+elif _abs_external and not _abs_internal:
+	AUDIOBOOKSHELF_INTERNAL_URL = _abs_external
+	AUDIOBOOKSHELF_EXTERNAL_URL = _abs_external
+else:
+	# Both set or none set: use both or fallback to default
+	AUDIOBOOKSHELF_INTERNAL_URL = _abs_internal or "http://localhost"
+	AUDIOBOOKSHELF_EXTERNAL_URL = _abs_external or AUDIOBOOKSHELF_INTERNAL_URL
+
+# API endpoints
+AUDIOBOOKSHELF_API = AUDIOBOOKSHELF_INTERNAL_URL + "/api"
 
 # Authentication configuration
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
 AUTH_CACHE_EXPIRY = int(os.getenv("AUTH_CACHE_EXPIRY", "86400"))  # Default: 24 hours
+API_KEY_AUTH_ENABLED = os.getenv("API_KEY_AUTH_ENABLED", "true").lower() == "true"  # Enable API key authentication
+AUTH_TOKEN_CACHING = os.getenv("AUTH_TOKEN_CACHING", "true").lower() == "true"  # Enable token caching
 
 # Cache configuration (in seconds)
 AUTHORS_CACHE_EXPIRY = int(os.getenv("AUTHORS_CACHE_EXPIRY", "1800"))  # 30 minutes for collections
@@ -31,7 +52,12 @@ CACHE_FILE_PATH = os.getenv("CACHE_FILE_PATH", str(pathlib.Path(__file__).parent
 CACHE_SAVE_INTERVAL = int(os.getenv("CACHE_SAVE_INTERVAL", "300"))  # Save cache every 5 minutes by default
 
 # Pagination configuration
+PAGINATION_ENABLED = os.getenv("PAGINATION_ENABLED", "true").lower() == "true"  # Enable/disable pagination
 ITEMS_PER_PAGE = int(os.getenv("ITEMS_PER_PAGE", "25"))  # Default: 25 items per page
 
 # Logging configuration
 LOG_LEVEL = os.environ.get("OPDS_LOG_LEVEL", "INFO").upper()
+
+# Uvicorn reload is useful for local development but causes continuous filesystem
+# polling in the container. Keep production/container startup idle by default.
+RELOAD_ENABLED = os.getenv("OPDS_RELOAD", "false").lower() == "true"

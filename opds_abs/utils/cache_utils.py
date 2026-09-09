@@ -14,7 +14,6 @@ import threading
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Callable
 import functools
-import hashlib
 import json
 import asyncio
 import base64
@@ -59,9 +58,10 @@ def _create_cache_key(endpoint: str, params: Optional[Dict] = None, username: Op
     if username:
         components.append(username)
 
-    # Create a hash of the components
+    # Encode the components as a stable cache identifier. This is not a
+    # security boundary and must not be mistaken for credential hashing.
     key_str = "".join(components)
-    return hashlib.md5(key_str.encode()).hexdigest()
+    return base64.urlsafe_b64encode(key_str.encode()).decode().rstrip("=")
 
 
 def load_cache_from_disk() -> None:
@@ -255,7 +255,9 @@ def cached(expiry: int = DEFAULT_CACHE_EXPIRY) -> Callable:
             args_str = json.dumps([str(a) for a in args], sort_keys=True) if args else "[]"
             kwargs_str = json.dumps(kwargs, sort_keys=True) if kwargs else "{}"
 
-            cache_key = hashlib.md5(f"{func_name}:{args_str}:{kwargs_str}".encode()).hexdigest()
+            cache_key = base64.urlsafe_b64encode(
+                f"{func_name}:{args_str}:{kwargs_str}".encode()
+            ).decode().rstrip("=")
 
             # Try to get from cache
             cached_data = cache_get(cache_key, expiry)

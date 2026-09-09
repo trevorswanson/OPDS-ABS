@@ -10,6 +10,8 @@ import aiohttp
 # Local application imports
 from opds_abs.config import (
     AUDIOBOOKSHELF_API,
+    AUDIOBOOKSHELF_INTERNAL_URL,
+    AUDIOBOOKSHELF_EXTERNAL_URL,
     AUTH_ENABLED,
     AUTHORS_CACHE_EXPIRY,
     COLLECTIONS_CACHE_EXPIRY,
@@ -68,6 +70,10 @@ async def fetch_from_api(
         if 'token' in params:
             token = params.pop('token')  # Extract and remove from params
             logger.debug("Using token from params for user %s", username)
+        # Check if api_key is in the params
+        elif 'api_key' in params:
+            token = params.pop('api_key')  # Use API key as token
+            logger.debug("Using API key from params for user %s", username)
         else:
             # Try to get from the TOKEN_CACHE
             token = get_token_for_username(username)
@@ -159,7 +165,8 @@ async def fetch_from_api(
     except aiohttp.ClientConnectorError as conn_error:
         # This happens when the server is down or unreachable - log as ERROR but without traceback
         error_id = id(conn_error)
-        logger.error("ERROR [%s]: Cannot connect to Audiobookshelf server at %s", error_id, AUDIOBOOKSHELF_API)
+        logger.error("ERROR [%s]: Cannot connect to Audiobookshelf server at %s (API endpoint: %s)",
+                    error_id, AUDIOBOOKSHELF_API, endpoint)
 
         # Check if we have cached data we can use as a fallback
         if not bypass_cache:
@@ -168,8 +175,15 @@ async def fetch_from_api(
                 logger.debug("Using expired cache data for %s because server is unreachable", endpoint)
                 return cached_data
 
+        # Extract hostname for clearer error message
+        url_parts = AUDIOBOOKSHELF_INTERNAL_URL.split('//')
+        if len(url_parts) > 1:
+            host_info = url_parts[1]
+        else:
+            host_info = AUDIOBOOKSHELF_INTERNAL_URL
+
         raise APIClientError(
-            f"Cannot connect to Audiobookshelf server. Please ensure it's running and accessible."
+            f"Cannot connect to Audiobookshelf server at {host_info}. Please ensure it's running and accessible."
         ) from None  # Use "from None" to suppress the traceback in the logs
     except Exception as e:
         context = f"API call to {url}"

@@ -6,7 +6,7 @@ import asyncio
 # Local application imports
 from opds_abs.core.feed_generator import BaseFeedGenerator
 from opds_abs.api.client import fetch_from_api, get_download_urls_from_item
-from opds_abs.config import AUDIOBOOKSHELF_API
+from opds_abs.config import AUDIOBOOKSHELF_API, ITEMS_PER_PAGE, PAGINATION_ENABLED
 from opds_abs.utils import dict_to_xml
 from opds_abs.utils.cache_utils import get_cached_library_items, get_cached_series_details
 from opds_abs.utils.error_utils import log_error, handle_exception
@@ -390,8 +390,7 @@ class SeriesFeedGenerator(BaseFeedGenerator):
         first_book = series.get('books', [])[0] if series.get('books') else {}
         first_book_id = first_book.get("id", None)
         first_book_metadata = first_book.get('media', {}).get('metadata', {})
-        book_path = f"{AUDIOBOOKSHELF_API}/items/{first_book_id}" if first_book_id else ""
-        cover_url = f"{book_path}/cover?format=jpeg" if book_path else ""
+        cover_url = f"/opds/proxy/cover/{first_book_id}" if first_book_id else ""
 
         # Determine if this was called from search feed by checking if authorName is already set
         # The search feed will directly set authorName, while series feed won't have this property

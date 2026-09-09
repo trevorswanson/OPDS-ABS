@@ -11,10 +11,16 @@ services:
       - PUID=1000  # Set to your user's UID for proper file permissions
       - PGID=1000  # Set to your user's GID for proper file permissions
       # Application settings
-      - AUDIOBOOKSHELF_URL=http://audiobookshelf:13378
+      # Legacy: AUDIOBOOKSHELF_URL is supported for backward compatibility
+      # - AUDIOBOOKSHELF_URL=http://audiobookshelf
+      - AUDIOBOOKSHELF_INTERNAL_URL=http://audiobookshelf
+      - AUDIOBOOKSHELF_EXTERNAL_URL=https://abs.example.com
       - AUTH_ENABLED=true
+      - API_KEY_AUTH_ENABLED=true
       - OPDS_LOG_LEVEL=INFO
+      - OPDS_RELOAD=false
       - CACHE_PERSISTENCE_ENABLED=true
-      - ITEMS_PER_PAGE=25  # Set to 0 to show all items without pagination
+      - PAGINATION_ENABLED=true
+      - ITEMS_PER_PAGE=25  # Set to 0 to show all items but keep pagination links
     volumes:
       - ./opds_abs/data:/app/opds_abs/data
