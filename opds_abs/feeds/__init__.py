@@ -1,4 +1,4 @@
-"""Feed generators for OPDS"""
+"""Feed generators for OPDS."""
 
 from opds_abs.feeds.library_feed import LibraryFeedGenerator
 from opds_abs.feeds.navigation_feed import NavigationFeedGenerator
