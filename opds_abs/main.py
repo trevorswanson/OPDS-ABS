@@ -416,7 +416,7 @@ async def opds_root_redirect(
         # Check if authentication was disabled or failed because server is unavailable
         if not AUTH_ENABLED:
             # Authentication is disabled, so use a default username
-            return RedirectResponse(url=f"/opds/anonymous")
+            return RedirectResponse(url="/opds/anonymous")
         else:
             # If not authenticated, return a 401 with WWW-Authenticate header
             raise HTTPException(

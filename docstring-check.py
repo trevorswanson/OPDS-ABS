@@ -137,18 +137,18 @@ def display_results(results, args):
         'D417': 'Missing argument descriptions in the docstring'
     }
 
-    print(f"\n📊 Docstring Check Summary:")
+    print("\n📊 Docstring Check Summary:")
     print(f"{'='*80}")
     print(f"Files with issues: {total_files}")
     print(f"Total issues found: {total_errors}")
-    print(f"\n🔍 Issues by type:")
+    print("\n🔍 Issues by type:")
 
     for code, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True):
         meaning = error_meanings.get(code, "Unknown issue")
         print(f"  {code}: {count} occurrences - {meaning}")
 
     if not args.summary:
-        print(f"\n📝 Detailed issues:")
+        print("\n📝 Detailed issues:")
         print(f"{'='*80}")
         for file_path, errors in sorted(results.items()):
             print(f"\n📄 {file_path} ({len(errors)} issues)")
