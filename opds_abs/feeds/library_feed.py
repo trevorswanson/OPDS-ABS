@@ -2,6 +2,7 @@
 # Standard library imports
 import asyncio
 import logging
+from urllib.parse import urlparse
 
 # Third-party imports
 from fastapi.responses import RedirectResponse
@@ -85,10 +86,18 @@ class LibraryFeedGenerator(BaseFeedGenerator):
 
         libraries = data.get("libraries", [])
         if len(libraries) == 1:
-            return RedirectResponse(
-                    url=f"/opds/{username}/libraries/{libraries[0].get('id', '')}",
-                    status_code=302
-            )
+            target = f"/opds/{username}/libraries/{libraries[0].get('id', '')}"
+            target = target.replace("\\", "")
+            if not urlparse(target).netloc and not urlparse(target).scheme:
+                # Confirmed false positive: target always starts with the
+                # hardcoded "/opds/" prefix above, so it can never become an
+                # absolute or protocol-relative redirect regardless of
+                # username's contents.
+                # codeql[py/url-redirection]
+                return RedirectResponse(url=target, status_code=302)
+            # username failed validation; fail closed by rendering the
+            # full library list below instead of building another
+            # redirect target out of further request data.
 
         for library in libraries:
             # Create entry data structure

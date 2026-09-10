@@ -718,6 +718,25 @@ class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/opds/alice/libraries/lib-1", body)
         self.assertIn("/opds/alice/libraries/lib-2", body)
 
+    async def test_library_root_redirect_strips_backslashes_from_username(self):
+        # A username containing a backslash could otherwise be used to build a
+        # protocol-relative redirect target (some browsers normalize "\" to "/"),
+        # e.g. "/opds/\\evil.com/libraries/lib-1" -> "//evil.com/libraries/lib-1".
+        # The fix strips backslashes before redirecting, so no such sequence
+        # ever reaches the Location header.
+        from opds_abs.feeds.library_feed import LibraryFeedGenerator
+
+        with patch(
+                "opds_abs.feeds.library_feed.fetch_from_api",
+                new=AsyncMock(return_value={"libraries": [{"id": "lib-1"}]})):
+            response = await LibraryFeedGenerator().generate_root_feed(
+                "\\evil.com", token="token")
+        self.assertEqual(response.status_code, 302)
+        location = response.headers["location"]
+        self.assertNotIn("\\", location)
+        self.assertFalse(location.startswith("//"))
+        self.assertNotIn("://", location)
+
     async def test_library_items_feed_lists_ebooks_from_api(self):
         from opds_abs.feeds.library_feed import LibraryFeedGenerator
 
