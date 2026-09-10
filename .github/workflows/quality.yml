@@ -92,32 +92,26 @@ jobs:
           path: coverage.xml
           retention-days: 14
 
+      - name: Export head coverage data
+        if: ${{ github.event_name == 'pull_request' }}
+        run: coverage json -o coverage_head.json
+
+      - name: Run tests with coverage on PR base
+        if: ${{ github.event_name == 'pull_request' }}
+        continue-on-error: true
+        run: |
+          git worktree add /tmp/pr-base "${{ github.event.pull_request.base.sha }}"
+          cd /tmp/pr-base
+          python -m pip install -r requirements-dev.txt
+          coverage run --source=opds_abs -m unittest discover -s tests -q || true
+          coverage json -o "${GITHUB_WORKSPACE}/coverage_base.json"
+
       - name: Build coverage comment body
         if: ${{ github.event_name == 'pull_request' }}
         run: |
-          {
-            echo "### Coverage report"
-            echo
-            echo "**Changed files**"
-            echo '```'
-            CHANGED_PY_FILES=$(git diff --name-only --diff-filter=ACMR \
-              "${{ github.event.pull_request.base.sha }}" HEAD -- '*.py' | grep '^opds_abs/' || true)
-            if [ -n "$CHANGED_PY_FILES" ]; then
-              # setup.cfg sets fail_under=90, which makes `coverage report` exit
-              # non-zero when the reported subset is below it; that enforcement
-              # already happened in the previous step, so ignore it here - this
-              # step is purely informational.
-              coverage report -m --include="$(echo "$CHANGED_PY_FILES" | paste -sd, -)" || true
-            else
-              echo "No opds_abs/*.py files changed in this PR."
-            fi
-            echo '```'
-            echo
-            echo "**Overall**"
-            echo '```'
-            coverage report -m || true
-            echo '```'
-          } > coverage_comment.md
+          CHANGED_PY_FILES=$(git diff --name-only --diff-filter=ACMR \
+            "${{ github.event.pull_request.base.sha }}" HEAD -- '*.py' | grep '^opds_abs/' || true)
+          python .github/scripts/coverage_diff.py "$CHANGED_PY_FILES"
 
       - name: Post coverage comment
         if: ${{ github.event_name == 'pull_request' }}
