@@ -844,6 +844,36 @@ class FetchDownloadHeadInfoTests(unittest.IsolatedAsyncioTestCase):
                 "http://x", {}, "book-1")
         self.assertEqual(headers["Content-Disposition"], 'attachment; filename="real.epub"')
 
+    async def test_sanitizes_non_latin1_content_disposition(self):
+        # Reproduces https://github.com/petr-prikryl/OPDS-ABS/issues/42: Audiobookshelf
+        # sends the filename's raw latin-1 bytes (e.g. 0xFC for "ü") straight through the
+        # Content-Disposition header without RFC 6266 encoding. aiohttp decodes headers as
+        # UTF-8 with surrogateescape, so those bytes come back as a string containing the
+        # surrogate '\udcfc' - a character that itself can't be latin-1 encoded when the
+        # response is later sent to the client.
+        filename = "B\udcfcch.epub"
+        response_obj = MagicMock()
+        response_obj.raise_for_status = MagicMock()
+        response_obj.headers = {
+            "Content-Type": "application/epub+zip",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        }
+        response_obj.__aenter__ = AsyncMock(return_value=response_obj)
+        response_obj.__aexit__ = AsyncMock(return_value=None)
+
+        session = ScriptedSession()
+        session.head = MagicMock(return_value=response_obj)
+
+        with patch.object(main.aiohttp, "ClientSession", scripted_session_factory(session)):
+            _content_type, headers = await main._fetch_download_head_info(
+                "http://x", {}, "book-1")
+
+        # The sanitized value must be encodable as latin-1, since that's what the ASGI
+        # server does when writing response headers to the wire.
+        sanitized = headers["Content-Disposition"]
+        sanitized.encode("latin-1")
+        self.assertEqual(sanitized, 'attachment; filename="B\xfcch.epub"')
+
     async def test_ignores_headers_outside_the_forwarded_allowlist(self):
         response_obj = MagicMock()
         response_obj.raise_for_status = MagicMock()
