@@ -651,6 +651,33 @@ class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
         }]})
         self.assertEqual([book["id"] for book in filtered[0]["books"]], ["book-1"])
 
+    async def test_get_most_common_author_skips_blank_author_names(self):
+        from opds_abs.feeds.series_feed import SeriesFeedGenerator
+
+        generator = SeriesFeedGenerator()
+        items = [
+            {"media": {"metadata": {"authors": [{"name": ""}, {"name": "A"}]}}},
+            {"media": {"metadata": {"authors": [{"name": "A"}]}}},
+        ]
+        self.assertEqual(generator.get_most_common_author(items), "A")
+
+    async def test_get_series_display_info_falls_back_to_defaults(self):
+        from opds_abs.feeds.series_feed import SeriesFeedGenerator
+
+        generator = SeriesFeedGenerator()
+        name, author = generator._get_series_display_info(None, [])
+        self.assertEqual(name, "Unknown Series")
+        self.assertEqual(author, "Unknown Author")
+
+    async def test_get_series_display_info_uses_series_details_author_without_items(self):
+        from opds_abs.feeds.series_feed import SeriesFeedGenerator
+
+        generator = SeriesFeedGenerator()
+        name, author = generator._get_series_display_info(
+            {"name": "The Series", "authorName": "Jane Doe"}, [])
+        self.assertEqual(name, "The Series")
+        self.assertEqual(author, "Jane Doe")
+
     async def test_series_items_fallback_substitutes_library_id_in_url(self):
         """Regression test for a missing f-string prefix in the fallback URL.
 
@@ -717,6 +744,25 @@ class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Non-Fiction", body)
         self.assertIn("/opds/alice/libraries/lib-1", body)
         self.assertIn("/opds/alice/libraries/lib-2", body)
+
+    async def test_library_root_redirect_strips_backslashes_from_username(self):
+        # A username containing a backslash could otherwise be used to build a
+        # protocol-relative redirect target (some browsers normalize "\" to "/"),
+        # e.g. "/opds/\\evil.com/libraries/lib-1" -> "//evil.com/libraries/lib-1".
+        # The fix strips backslashes before redirecting, so no such sequence
+        # ever reaches the Location header.
+        from opds_abs.feeds.library_feed import LibraryFeedGenerator
+
+        with patch(
+                "opds_abs.feeds.library_feed.fetch_from_api",
+                new=AsyncMock(return_value={"libraries": [{"id": "lib-1"}]})):
+            response = await LibraryFeedGenerator().generate_root_feed(
+                "\\evil.com", token="token")
+        self.assertEqual(response.status_code, 302)
+        location = response.headers["location"]
+        self.assertNotIn("\\", location)
+        self.assertFalse(location.startswith("//"))
+        self.assertNotIn("://", location)
 
     async def test_library_items_feed_lists_ebooks_from_api(self):
         from opds_abs.feeds.library_feed import LibraryFeedGenerator

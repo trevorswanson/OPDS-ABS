@@ -11,6 +11,9 @@ on:
       - '**.py'
   workflow_dispatch:  # Allows manual triggering
 
+permissions:
+  contents: read
+
 jobs:
   docstring-check:
     runs-on: ubuntu-latest
