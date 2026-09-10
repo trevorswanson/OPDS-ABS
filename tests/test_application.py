@@ -6,7 +6,7 @@ import copy
 import json
 import time
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -255,6 +255,7 @@ class FeedGeneratorTests(unittest.TestCase):
         self.assertEqual([item["id"]
                          for item in self.generator.paginate_results(filtered, 2, 1)], ["3"])
         self.assertEqual(self.generator.extract_value({"a": {"b": 2}}, "a.b"), 2)
+        self.assertIsNone(self.generator.extract_value({"a": {}}, "a.b.c"))
         self.assertEqual(self.generator.create_filter("series"), "c2VyaWVz")
 
     def test_book_feed_contains_mime_type_cover_and_download_links(self):
@@ -267,6 +268,16 @@ class FeedGeneratorTests(unittest.TestCase):
         self.assertIn("application/pdf", xml)
         self.assertIn("/opds/proxy/cover/book-1", xml)
         self.assertIn("/opds/proxy/download/book-1/file/99", xml)
+
+    def test_book_feed_series_filter_adds_series_entry(self):
+        feed = self.generator.create_base_feed()
+        book = {"id": "book-1", "addedAt": 0, "media": {"metadata": {
+            "title": "Title", "authorName": "Author", "genres": [], "description": "Desc",
+            "series": {"name": "The Series", "sequence": "2"},
+        }, "ebookFormat": "epub"}}
+        self.generator.add_book_to_feed(feed, book, [{"ino": "99"}], query_filter="series123")
+        xml = etree.tostring(feed).decode()
+        self.assertIn("The Series #2", xml)
         self.assertNotIn("secret", xml)
 
     def test_pagination_metadata_and_links_are_generated(self):
@@ -277,6 +288,61 @@ class FeedGeneratorTests(unittest.TestCase):
         self.assertIn(">11</opensearch:startIndex>", xml)
         self.assertIn('rel="previous"', xml)
         self.assertIn('start_index=21', xml)
+
+
+class PaginatePageItemsTests(unittest.TestCase):
+    """Verify page-number based pagination's bounds-clamping and disabled mode."""
+
+    def test_pagination_disabled_returns_all_items_unpaged(self):
+        from opds_abs.core import feed_generator as feed_generator_module
+
+        items = list(range(5))
+        with patch.object(feed_generator_module, "PAGINATION_ENABLED", False):
+            paged, page, total_pages, no_pagination = BaseFeedGenerator().paginate_page_items(
+                items, page=1, per_page=2)
+        self.assertEqual(paged, items)
+        self.assertEqual(page, 1)
+        self.assertEqual(total_pages, 1)
+        self.assertTrue(no_pagination)
+
+    def test_page_below_one_clamps_to_first_page(self):
+        paged, page, _total_pages, _no_pagination = BaseFeedGenerator().paginate_page_items(
+            list(range(10)), page=0, per_page=5)
+        self.assertEqual(page, 1)
+        self.assertEqual(paged, list(range(5)))
+
+    def test_page_beyond_last_clamps_to_last_page(self):
+        paged, page, total_pages, _no_pagination = BaseFeedGenerator().paginate_page_items(
+            list(range(10)), page=99, per_page=5)
+        self.assertEqual(page, total_pages)
+        self.assertEqual(paged, list(range(5, 10)))
+
+
+class AddPagedBooksToFeedTests(unittest.IsolatedAsyncioTestCase):
+    """Verify batch ebook-file fetching pairs each result with the right book."""
+
+    async def test_book_without_id_is_skipped_without_misaligning_others(self):
+        from opds_abs.core import feed_generator as feed_generator_module
+
+        generator = BaseFeedGenerator()
+        book_a = {"id": "a"}
+        book_missing_id = {"media": {}}
+        book_b = {"id": "b"}
+
+        async def fake_download_urls(book_id, username=None, token=None):
+            del username, token
+            return [{"ino": book_id}]
+
+        with patch.object(
+                feed_generator_module, "get_download_urls_from_item",
+                new=AsyncMock(side_effect=fake_download_urls)), \
+             patch.object(generator, "add_book_to_feed") as add_mock:
+            await generator.add_paged_books_to_feed(
+                "feed", [book_a, book_missing_id, book_b], "alice", "tok")
+
+        self.assertEqual(add_mock.call_count, 2)
+        add_mock.assert_any_call("feed", book_a, [{"ino": "a"}], "", "tok")
+        add_mock.assert_any_call("feed", book_b, [{"ino": "b"}], "", "tok")
 
 
 class FeedAndRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -642,13 +708,20 @@ class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
             {"media": {"metadata": {"authors": [{"name": "A"}]}}},
         ]
         self.assertEqual(generator.get_most_common_author(items), "A")
-        filtered = generator.filter_series({"results": [{
-            "id": "series-1",
-            "books": [
-                {"id": "book-1", "media": {"ebookFormat": "epub"}},
-                {"id": "audio-1", "media": {}},
-            ],
-        }]})
+        filtered = generator.filter_series({"results": [
+            {
+                "id": "series-1",
+                "books": [
+                    {"id": "book-1", "media": {"ebookFormat": "epub"}},
+                    {"id": "audio-1", "media": {}},
+                ],
+            },
+            {
+                "id": "series-2",
+                "books": [{"id": "audio-2", "media": {}}],
+            },
+        ]})
+        self.assertEqual([series["id"] for series in filtered], ["series-1"])
         self.assertEqual([book["id"] for book in filtered[0]["books"]], ["book-1"])
 
     async def test_get_most_common_author_skips_blank_author_names(self):
@@ -763,6 +836,20 @@ class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("\\", location)
         self.assertFalse(location.startswith("//"))
         self.assertNotIn("://", location)
+
+    async def test_library_root_falls_back_to_full_list_when_target_has_a_netloc(self):
+        from opds_abs.feeds import library_feed as library_feed_module
+
+        unsafe_parsed = MagicMock(netloc="evil.example.com", scheme="")
+        with patch(
+                "opds_abs.feeds.library_feed.fetch_from_api",
+                new=AsyncMock(return_value={
+                    "libraries": [{"id": "lib-1", "name": "Fiction"}]})), \
+             patch.object(library_feed_module, "urlparse", return_value=unsafe_parsed):
+            response = await library_feed_module.LibraryFeedGenerator().generate_root_feed(
+                "alice", token="token")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Fiction", response.body.decode())
 
     async def test_library_items_feed_lists_ebooks_from_api(self):
         from opds_abs.feeds.library_feed import LibraryFeedGenerator

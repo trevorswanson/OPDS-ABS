@@ -403,6 +403,14 @@ class ParseAuthHeaderTests(unittest.TestCase):
         self.assertEqual(
             auth_utils.get_credentials_from_request(request), (None, None, None))
 
+    def test_unexpected_error_parsing_header_returns_none_tuple(self):
+        from tests.test_application import make_request
+        request = make_request(headers={"Authorization": "Basic abc123"})
+        with patch.object(
+                auth_utils, "_parse_basic_auth_header", side_effect=RuntimeError("boom")):
+            self.assertEqual(
+                auth_utils.get_credentials_from_request(request), (None, None, None))
+
 
 class GetUserTokenTests(unittest.IsolatedAsyncioTestCase):
     """Verify token caching and retrieval logic."""
@@ -426,6 +434,14 @@ class GetUserTokenTests(unittest.IsolatedAsyncioTestCase):
             result = await auth_utils.get_user_token("api_key_user", None, "key123")
         self.assertEqual(result, ("tok", "RealUser"))
         self.assertIn("RealUser", auth_utils.TOKEN_CACHE)
+
+    async def test_api_key_with_real_username_is_left_unchanged(self):
+        with patch.object(
+                auth_utils, "authenticate_with_api_key",
+                new=AsyncMock(return_value=("tok", "alice"))):
+            result = await auth_utils.get_user_token("alice", None, "key123")
+        self.assertEqual(result, ("tok", "alice"))
+        self.assertIn("alice", auth_utils.TOKEN_CACHE)
 
     async def test_caching_disabled_does_not_populate_token_cache(self):
         with patch.object(auth_utils, "AUTH_TOKEN_CACHING", False), \
@@ -467,6 +483,17 @@ class VerifyCredentialsTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(return_value=("tok", "RealUser"))):
             result = await auth_utils.verify_credentials(make_request())
         self.assertEqual(result, ("RealUser", "tok", "RealUser"))
+
+    async def test_api_key_success_with_real_username_is_left_unchanged(self):
+        from tests.test_application import make_request
+        with patch.object(
+                auth_utils, "get_credentials_from_request",
+                return_value=("alice", None, "key123")), \
+             patch.object(
+                auth_utils, "get_user_token",
+                new=AsyncMock(return_value=("tok", "alice"))):
+            result = await auth_utils.verify_credentials(make_request())
+        self.assertEqual(result, ("alice", "tok", "alice"))
 
     async def test_api_key_failure_reraises(self):
         from tests.test_application import make_request
@@ -583,6 +610,32 @@ class RequireAuthAndTokenLookupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(auth_utils.get_token_for_username("nobody"))
 
 
+class ResolveEffectiveUsernameTests(unittest.TestCase):
+    """Verify username resolution, redirects, and the query-string/netloc edges."""
+
+    def test_no_redirect_needed_when_names_match(self):
+        effective, redirect = auth_utils.resolve_effective_username(
+            "Bob", "Bob", "Bob", "")
+        self.assertEqual(effective, "Bob")
+        self.assertIsNone(redirect)
+
+    def test_redirect_includes_query_params_when_present(self):
+        with patch.object(auth_utils, "AUTH_ENABLED", True):
+            effective, redirect = auth_utils.resolve_effective_username(
+                "bob", "bob", "Bob", "/libraries/lib-1", query_params={"q": "dune"})
+        self.assertIsNone(effective)
+        self.assertEqual(redirect.headers["location"], "/opds/Bob/libraries/lib-1?q=dune")
+
+    def test_falls_back_to_routed_username_when_target_has_a_netloc(self):
+        unsafe_parsed = MagicMock(netloc="evil.example.com", scheme="")
+        with patch.object(auth_utils, "AUTH_ENABLED", True), \
+             patch.object(auth_utils, "urlparse", return_value=unsafe_parsed):
+            effective, redirect = auth_utils.resolve_effective_username(
+                "bob", "bob", "Bob", "")
+        self.assertEqual(effective, "bob")
+        self.assertIsNone(redirect)
+
+
 # ---------------------------------------------------------------------------
 # cache_utils
 # ---------------------------------------------------------------------------
@@ -660,6 +713,16 @@ class CachePersistenceTests(unittest.TestCase):
         self.assertNotIn("expired", cache_utils._cache)
         self.assertIn("fresh", cache_utils._cache)
 
+    def test_save_logs_and_continues_on_pickle_error(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cache_path = Path(tmp_dir) / "cache.pkl"
+            with patch.object(cache_utils, "CACHE_PERSISTENCE_ENABLED", True), \
+                 patch.object(cache_utils, "CACHE_FILE_PATH", str(cache_path)), \
+                 patch.object(cache_utils, "CACHE_SAVE_INTERVAL", 0), \
+                 patch.object(
+                    cache_utils.pickle, "dump", side_effect=pickle.PickleError("boom")):
+                cache_utils.save_cache_to_disk()
+
 
 class CacheCoreTests(unittest.TestCase):
     """Verify get_cache, cache_set background save, and clear_cache."""
@@ -694,6 +757,14 @@ class CacheCoreTests(unittest.TestCase):
         self.assertEqual(count, 2)
         self.assertEqual(cache_utils._cache, {})
         mock_save.assert_called_once()
+
+    def test_clear_cache_skips_save_when_persistence_disabled(self):
+        cache_utils._cache["a"] = (time.time(), 1)
+        with patch.object(cache_utils, "CACHE_PERSISTENCE_ENABLED", False), \
+             patch.object(cache_utils, "save_cache_to_disk") as mock_save:
+            count = cache_utils.clear_cache()
+        self.assertEqual(count, 1)
+        mock_save.assert_not_called()
 
 
 class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
@@ -743,6 +814,12 @@ class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result2, {"book": []})
         fetch.assert_not_awaited()
 
+        fetch.reset_mock()
+        result3 = await cache_utils.get_cached_search_results(
+            fetch, "alice", "lib-1", "dune", bypass_cache=True)
+        self.assertEqual(result3, {"book": []})
+        fetch.assert_awaited_once()
+
     async def test_get_cached_series_details_found_and_cached(self):
         fetch = AsyncMock(return_value={"results": [{"id": "s1", "name": "Series One"}]})
         result = await cache_utils.get_cached_series_details(fetch, "alice", "lib-1", "s1")
@@ -758,6 +835,14 @@ class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
         fetch = AsyncMock(return_value={"results": []})
         result = await cache_utils.get_cached_series_details(fetch, "alice", "lib-1", "missing")
         self.assertIsNone(result)
+
+    async def test_get_cached_series_details_skips_non_matching_before_match(self):
+        fetch = AsyncMock(return_value={"results": [
+            {"id": "other", "name": "Other Series"},
+            {"id": "s1", "name": "Series One"},
+        ]})
+        result = await cache_utils.get_cached_series_details(fetch, "alice", "lib-1", "s1")
+        self.assertEqual(result["name"], "Series One")
 
     async def test_get_cached_series_details_swallows_fetch_error(self):
         fetch = AsyncMock(side_effect=RuntimeError("boom"))
@@ -789,6 +874,18 @@ class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
         ok = await cache_utils._enhance_authors_with_details(
             fetch, "lib-1", "alice", "tok", {})
         self.assertFalse(ok)
+
+    async def test_enhance_authors_with_details_skips_unrelated_authors(self):
+        fetch = AsyncMock(return_value={"authors": [
+            {"name": "Unrelated", "id": "author-2", "imagePath": "/other"},
+            {"name": "A", "id": "author-1", "imagePath": "/img"},
+        ]})
+        authors = {"A": {"name": "A", "ebook_count": 1, "id": None, "imagePath": None}}
+        ok = await cache_utils._enhance_authors_with_details(
+            fetch, "lib-1", "alice", "tok", authors)
+        self.assertTrue(ok)
+        self.assertEqual(authors["A"]["id"], "author-1")
+        self.assertNotIn("Unrelated", authors)
 
     async def test_get_cached_author_details_empty_library_returns_empty_list(self):
         fetch = AsyncMock(return_value={"results": []})
@@ -836,6 +933,33 @@ class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
             fetch, lambda data: data["results"], "alice", "lib-1", "s1")
         self.assertEqual(cached, [{"id": "b1"}])
         fetch.assert_not_awaited()
+
+        fetch.reset_mock()
+        bypassed = await cache_utils.get_cached_series_items(
+            fetch, lambda data: data["results"], "alice", "lib-1", "s1", bypass_cache=True)
+        self.assertEqual(bypassed, [{"id": "b1"}])
+        fetch.assert_awaited_once()
+
+    async def test_get_cached_author_details_bypass_cache_and_cache_hit(self):
+        fetch = AsyncMock(return_value={"results": [
+            {"media": {"ebookFormat": "epub", "metadata": {"authorName": "A"}}}]})
+
+        async def fetch_dispatch(endpoint, params=None, username=None, token=None):
+            if endpoint == "/libraries/lib-1/authors":
+                return {"authors": [{"name": "A", "id": "author-1", "imagePath": "/img"}]}
+            return await fetch(endpoint, params, username=username, token=token)
+
+        result = await cache_utils.get_cached_author_details(
+            fetch_dispatch, lambda data: data["results"], "alice", "lib-1")
+        self.assertEqual(result[0]["id"], "author-1")
+
+        cached = await cache_utils.get_cached_author_details(
+            fetch_dispatch, lambda data: data["results"], "alice", "lib-1")
+        self.assertEqual(cached, result)
+
+        bypassed = await cache_utils.get_cached_author_details(
+            fetch_dispatch, lambda data: data["results"], "alice", "lib-1", bypass_cache=True)
+        self.assertEqual(bypassed[0]["id"], "author-1")
 
 
 # ---------------------------------------------------------------------------

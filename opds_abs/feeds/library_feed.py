@@ -452,19 +452,18 @@ class LibraryFeedGenerator(BaseFeedGenerator):
             # so no copy of the (potentially large) cached list is needed here.
             if sort_param == 'addedAt':
                 # Sort by addedAt in descending order (newest first)
-                library_items = sorted(
+                return sorted(
                     cached_items,
                     key=lambda x: x.get('addedAt', 0),
                     reverse=True
                 )
-            elif sort_param == 'media.metadata.title':
-                # Sort by title in ascending order
-                library_items = sorted(
-                    cached_items,
-                    key=lambda x: x.get('media', {}).get('metadata', {}).get('title', '').lower(),
-                    reverse=False
-                )
-            return library_items
+            # is_special_feed guarantees sort_param is 'media.metadata.title' here.
+            # Sort by title in ascending order
+            return sorted(
+                cached_items,
+                key=lambda x: x.get('media', {}).get('metadata', {}).get('title', '').lower(),
+                reverse=False
+            )
 
         # For feeds with other filters or sorts, use the regular API call
         logger.debug("Fetching library items from API with params: %s", params)

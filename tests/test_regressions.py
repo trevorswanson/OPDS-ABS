@@ -1,6 +1,7 @@
 """Regression tests for container startup and authenticated feed links."""
 
 import importlib
+import logging
 import os
 import sys
 import unittest
@@ -41,6 +42,45 @@ class ReloadConfigurationTests(unittest.TestCase):
         with patch.object(run.uvicorn, "run") as uvicorn_run:
             run.run_server()
         self.assertIs(uvicorn_run.call_args.kwargs["reload"], run.RELOAD_ENABLED)
+
+
+class MainModuleStartupTests(unittest.TestCase):
+    """Verify main.py's module-level logging and cache-persistence setup."""
+
+    def test_invalid_log_level_falls_back_to_info(self):
+        old_value = os.environ.get("OPDS_LOG_LEVEL")
+        os.environ["OPDS_LOG_LEVEL"] = "NOTALEVEL"
+        try:
+            import opds_abs.config as config
+            importlib.reload(config)
+            import opds_abs.main as main
+            importlib.reload(main)
+            self.assertEqual(main.app_logger.level, logging.INFO)
+        finally:
+            if old_value is None:
+                os.environ.pop("OPDS_LOG_LEVEL", None)
+            else:
+                os.environ["OPDS_LOG_LEVEL"] = old_value
+            importlib.reload(sys.modules["opds_abs.config"])
+            importlib.reload(sys.modules["opds_abs.main"])
+
+    def test_atexit_save_hook_skipped_when_persistence_disabled(self):
+        old_value = os.environ.get("CACHE_PERSISTENCE_ENABLED")
+        os.environ["CACHE_PERSISTENCE_ENABLED"] = "false"
+        try:
+            import opds_abs.config as config
+            importlib.reload(config)
+            with patch("atexit.register") as mock_register:
+                import opds_abs.main as main
+                importlib.reload(main)
+            mock_register.assert_not_called()
+        finally:
+            if old_value is None:
+                os.environ.pop("CACHE_PERSISTENCE_ENABLED", None)
+            else:
+                os.environ["CACHE_PERSISTENCE_ENABLED"] = old_value
+            importlib.reload(sys.modules["opds_abs.config"])
+            importlib.reload(sys.modules["opds_abs.main"])
 
 
 class CoverLinkTests(unittest.TestCase):

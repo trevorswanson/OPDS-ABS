@@ -412,20 +412,19 @@ def _parse_basic_auth_header(
 
         # Check if this is username:password format
         if ":" in decoded:
-            parts = decoded.split(":", 1)
-            if len(parts) == 2:
-                username, credential = parts
+            # decoded contains ":", so split(":", 1) always yields exactly 2 parts.
+            username, credential = decoded.split(":", 1)
 
-                # Examine credentials that look like API keys when API key auth is disabled.
-                if len(credential) >= 32 and not API_KEY_AUTH_ENABLED:
-                    logger.warning(
-                        "Credential for %s looks like an API key (length %s) "
-                        "but API_KEY_AUTH_ENABLED is False. Authentication may fail.",
-                        username, len(credential)
-                    )
+            # Examine credentials that look like API keys when API key auth is disabled.
+            if len(credential) >= 32 and not API_KEY_AUTH_ENABLED:
+                logger.warning(
+                    "Credential for %s looks like an API key (length %s) "
+                    "but API_KEY_AUTH_ENABLED is False. Authentication may fail.",
+                    username, len(credential)
+                )
 
-                # Return as a password; authentication handles it based on settings.
-                return username, credential, None
+            # Return as a password; authentication handles it based on settings.
+            return username, credential, None
 
         logger.warning("Basic auth doesn't contain username:password format")
     except Exception as e:

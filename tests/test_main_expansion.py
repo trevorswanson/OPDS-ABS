@@ -6,6 +6,7 @@ dedicated exception handlers) and the other ``tests/test_*_expansion.py``
 files for auth/cache/client/feed coverage added alongside this file.
 """
 
+import logging
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -114,11 +115,40 @@ class OpdsRootUsernameRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
 
 
+class OpdsNavRouteTests(unittest.TestCase):
+    """Verify GET /opds/{username}/libraries/{library_id}'s error paths."""
+
+    def tearDown(self):
+        main.app.dependency_overrides.clear()
+
+    def test_resource_not_found_reraises_to_dedicated_handler(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.navigation_feed, "generate_navigation_feed",
+                new=AsyncMock(side_effect=main.ResourceNotFoundError("library missing"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"<message>Resource not found</message>", response.content)
+
+
 class OpdsSearchRouteTests(unittest.TestCase):
     """Verify GET /opds/{username}/libraries/{library_id}/search."""
 
     def tearDown(self):
         main.app.dependency_overrides.clear()
+
+    def test_resource_not_found_reraises_to_dedicated_handler(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.search_feed, "generate_search_feed",
+                new=AsyncMock(side_effect=main.ResourceNotFoundError("missing"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/search", params={"q": "dune"})
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"<message>Resource not found</message>", response.content)
 
     def test_mismatched_user_redirects_preserving_query(self):
         override_auth(username="bob", display_name="Bob")
@@ -142,12 +172,34 @@ class OpdsSearchRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         search_mock.assert_awaited_once_with("Bob", "lib-1", {"q": "dune"}, token="tok")
 
+    def test_unexpected_error_returns_generic_error_response(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.search_feed, "generate_search_feed",
+                new=AsyncMock(side_effect=RuntimeError("boom"))):
+            with TestClient(main.app) as client:
+                response = client.get(
+                    "/opds/Bob/libraries/lib-1/search", params={"q": "dune"})
+        self.assertEqual(response.status_code, 500)
+
 
 class OpdsLibraryRouteTests(unittest.TestCase):
     """Verify GET /opds/{username}/libraries/{library_id}/items."""
 
     def tearDown(self):
         main.app.dependency_overrides.clear()
+
+    def test_resource_not_found_reraises_to_dedicated_handler(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.library_feed, "generate_library_items_feed",
+                new=AsyncMock(side_effect=main.ResourceNotFoundError("missing"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/items")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"<message>Resource not found</message>", response.content)
 
     def test_mismatched_user_redirects_preserving_query(self):
         override_auth(username="bob", display_name="Bob")
@@ -171,12 +223,33 @@ class OpdsLibraryRouteTests(unittest.TestCase):
         items_mock.assert_awaited_once_with(
             "Bob", "lib-1", {"start_index": "5"}, token="tok")
 
+    def test_unexpected_error_without_start_index_returns_generic_error(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.library_feed, "generate_library_items_feed",
+                new=AsyncMock(side_effect=RuntimeError("boom"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/items")
+        self.assertEqual(response.status_code, 500)
+
 
 class OpdsSeriesRouteTests(unittest.TestCase):
     """Verify GET /opds/{username}/libraries/{library_id}/series."""
 
     def tearDown(self):
         main.app.dependency_overrides.clear()
+
+    def test_resource_not_found_reraises_to_dedicated_handler(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.series_feed, "generate_series_feed",
+                new=AsyncMock(side_effect=main.ResourceNotFoundError("missing"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/series")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"<message>Resource not found</message>", response.content)
 
     def test_mismatched_user_redirects(self):
         override_auth(username="bob", display_name="Bob")
@@ -198,12 +271,81 @@ class OpdsSeriesRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         series_mock.assert_awaited_once_with("Bob", "lib-1", token="tok")
 
+    def test_unexpected_error_returns_generic_error_response(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.series_feed, "generate_series_feed",
+                new=AsyncMock(side_effect=RuntimeError("boom"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/series")
+        self.assertEqual(response.status_code, 500)
+
+
+class OpdsSeriesItemsRouteTests(unittest.TestCase):
+    """Verify GET /opds/{username}/libraries/{library_id}/series/{series_id}."""
+
+    def tearDown(self):
+        main.app.dependency_overrides.clear()
+
+    def test_resource_not_found_reraises_to_dedicated_handler(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.series_feed, "generate_series_items_feed",
+                new=AsyncMock(side_effect=main.ResourceNotFoundError("missing"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/series/s1")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"<message>Resource not found</message>", response.content)
+
+    def test_mismatched_user_redirects(self):
+        override_auth(username="bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True):
+            with TestClient(main.app, follow_redirects=False) as client:
+                response = client.get("/opds/bob/libraries/lib-1/series/s1")
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(
+            response.headers["location"], "/opds/Bob/libraries/lib-1/series/s1")
+
+    def test_matching_user_returns_series_items_feed(self):
+        override_auth(username="Bob", display_name="Bob")
+        items_mock = AsyncMock(return_value=main.Response(
+            content=b"<feed/>", media_type="application/atom+xml"))
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(main.series_feed, "generate_series_items_feed", new=items_mock):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/series/s1")
+        self.assertEqual(response.status_code, 200)
+        items_mock.assert_awaited_once_with("Bob", "lib-1", "s1", token="tok")
+
+    def test_unexpected_error_returns_generic_error_response(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.series_feed, "generate_series_items_feed",
+                new=AsyncMock(side_effect=RuntimeError("boom"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/series/s1")
+        self.assertEqual(response.status_code, 500)
+
 
 class OpdsCollectionsRouteTests(unittest.TestCase):
     """Verify GET /opds/{username}/libraries/{library_id}/collections."""
 
     def tearDown(self):
         main.app.dependency_overrides.clear()
+
+    def test_resource_not_found_reraises_to_dedicated_handler(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.collection_feed, "generate_collections_feed",
+                new=AsyncMock(side_effect=main.ResourceNotFoundError("missing"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/collections")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"<message>Resource not found</message>", response.content)
 
     def test_mismatched_user_redirects(self):
         override_auth(username="bob", display_name="Bob")
@@ -224,12 +366,33 @@ class OpdsCollectionsRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         collections_mock.assert_awaited_once_with("Bob", "lib-1", token="tok")
 
+    def test_unexpected_error_returns_generic_error_response(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.collection_feed, "generate_collections_feed",
+                new=AsyncMock(side_effect=RuntimeError("boom"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/collections")
+        self.assertEqual(response.status_code, 500)
+
 
 class OpdsCollectionItemsRouteTests(unittest.TestCase):
     """Verify GET /opds/{username}/libraries/{library_id}/collections/{collection_id}."""
 
     def tearDown(self):
         main.app.dependency_overrides.clear()
+
+    def test_resource_not_found_reraises_to_dedicated_handler(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.collection_feed, "generate_collection_items_feed",
+                new=AsyncMock(side_effect=main.ResourceNotFoundError("missing"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/collections/c1")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"<message>Resource not found</message>", response.content)
 
     def test_mismatched_user_redirects(self):
         override_auth(username="bob", display_name="Bob")
@@ -252,12 +415,33 @@ class OpdsCollectionItemsRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         items_mock.assert_awaited_once_with("Bob", "lib-1", "c1", token="tok")
 
+    def test_unexpected_error_returns_generic_error_response(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.collection_feed, "generate_collection_items_feed",
+                new=AsyncMock(side_effect=RuntimeError("boom"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/collections/c1")
+        self.assertEqual(response.status_code, 500)
+
 
 class OpdsAuthorsRouteTests(unittest.TestCase):
     """Verify GET /opds/{username}/libraries/{library_id}/authors."""
 
     def tearDown(self):
         main.app.dependency_overrides.clear()
+
+    def test_resource_not_found_reraises_to_dedicated_handler(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.author_feed, "generate_authors_feed",
+                new=AsyncMock(side_effect=main.ResourceNotFoundError("missing"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/authors")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"<message>Resource not found</message>", response.content)
 
     def test_mismatched_user_redirects(self):
         override_auth(username="bob", display_name="Bob")
@@ -277,12 +461,33 @@ class OpdsAuthorsRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         authors_mock.assert_awaited_once_with("Bob", "lib-1", token="tok")
 
+    def test_unexpected_error_returns_generic_error_response(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.author_feed, "generate_authors_feed",
+                new=AsyncMock(side_effect=RuntimeError("boom"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/authors")
+        self.assertEqual(response.status_code, 500)
+
 
 class OpdsAuthorItemsRouteTests(unittest.TestCase):
     """Verify GET /opds/{username}/libraries/{library_id}/authors/{author_id}."""
 
     def tearDown(self):
         main.app.dependency_overrides.clear()
+
+    def test_resource_not_found_reraises_to_dedicated_handler(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.author_feed, "generate_author_items_feed",
+                new=AsyncMock(side_effect=main.ResourceNotFoundError("missing"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/authors/a1")
+        self.assertEqual(response.status_code, 404)
+        self.assertIn(b"<message>Resource not found</message>", response.content)
 
     def test_mismatched_user_redirects(self):
         override_auth(username="bob", display_name="Bob")
@@ -303,6 +508,16 @@ class OpdsAuthorItemsRouteTests(unittest.TestCase):
                 response = client.get("/opds/Bob/libraries/lib-1/authors/a1")
         self.assertEqual(response.status_code, 200)
         items_mock.assert_awaited_once_with("Bob", "lib-1", "a1", token="tok")
+
+    def test_unexpected_error_returns_generic_error_response(self):
+        override_auth(username="Bob", display_name="Bob")
+        with patch.object(main, "AUTH_ENABLED", True), \
+             patch.object(
+                main.author_feed, "generate_author_items_feed",
+                new=AsyncMock(side_effect=RuntimeError("boom"))):
+            with TestClient(main.app) as client:
+                response = client.get("/opds/Bob/libraries/lib-1/authors/a1")
+        self.assertEqual(response.status_code, 500)
 
 
 class AdminCacheExceptionTests(unittest.TestCase):
@@ -355,6 +570,16 @@ class AdminCacheExceptionTests(unittest.TestCase):
                 response = client.post(
                     "/admin/cache/invalidate", params={"endpoint": "/items/1"})
         self.assertEqual(response.status_code, 500)
+
+    def test_cache_stats_omits_summary_fields_when_empty(self):
+        main.app.dependency_overrides[main.require_auth] = lambda: ("bob", "token", "Bob")
+        with patch.object(main, "get_cache", return_value={}):
+            with TestClient(main.app) as client:
+                response = client.get("/admin/cache/stats")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total_entries"], 0)
+        self.assertNotIn("oldest_entry_age", body)
 
 
 class ProxyAuthenticatedImageTests(unittest.IsolatedAsyncioTestCase):
@@ -619,6 +844,25 @@ class FetchDownloadHeadInfoTests(unittest.IsolatedAsyncioTestCase):
                 "http://x", {}, "book-1")
         self.assertEqual(headers["Content-Disposition"], 'attachment; filename="real.epub"')
 
+    async def test_ignores_headers_outside_the_forwarded_allowlist(self):
+        response_obj = MagicMock()
+        response_obj.raise_for_status = MagicMock()
+        response_obj.headers = {
+            "Content-Type": "application/epub+zip",
+            "X-Not-Forwarded": "should-be-skipped",
+        }
+        response_obj.__aenter__ = AsyncMock(return_value=response_obj)
+        response_obj.__aexit__ = AsyncMock(return_value=None)
+
+        session = ScriptedSession()
+        session.head = MagicMock(return_value=response_obj)
+
+        with patch.object(main.aiohttp, "ClientSession", scripted_session_factory(session)):
+            _content_type, headers = await main._fetch_download_head_info(
+                "http://x", {}, "book-1")
+        self.assertNotIn("X-Not-Forwarded", headers)
+        self.assertIn("Content-Disposition", headers)
+
     async def test_head_failure_falls_back_to_generic_headers(self):
         session = ScriptedSession()
         session.head = MagicMock(side_effect=make_connector_error())
@@ -667,6 +911,14 @@ class ExceptionHandlerContextTests(unittest.IsolatedAsyncioTestCase):
             request, main.AuthenticationError("token expired"))
         self.assertIn(b"Authentication for user Bob", response.body)
 
+    async def test_authentication_error_handler_no_username_uses_generic_context(self):
+        request = MagicMock()
+        request.method = "GET"
+        request.url.path = "/some/other/path"
+        response = await main.authentication_error_handler(
+            request, main.AuthenticationError("token expired"))
+        self.assertIn(b"GET /some/other/path", response.body)
+
     async def test_api_client_error_handler_no_username_uses_generic_context(self):
         request = MagicMock()
         request.method = "GET"
@@ -674,6 +926,35 @@ class ExceptionHandlerContextTests(unittest.IsolatedAsyncioTestCase):
         response = await main.api_client_error_handler(
             request, main.APIClientError("upstream down"))
         self.assertIn(b"GET /some/other/path", response.body)
+
+
+class ColorFormatterTests(unittest.TestCase):
+    """Verify ColorFormatter only computes the colorized prefix once."""
+
+    def test_reuses_existing_levelprefix_on_repeat_format_calls(self):
+        formatter = main.ColorFormatter("%(levelprefix)s %(message)s")
+        record = logging.LogRecord(
+            name="test", level=logging.INFO, pathname=__file__, lineno=1,
+            msg="hello", args=None, exc_info=None)
+
+        first_output = formatter.format(record)
+        record.levelprefix = "unchanged"
+        second_output = formatter.format(record)
+
+        self.assertIn("INFO", first_output)
+        self.assertIn("unchanged hello", second_output)
+
+
+class OpdsRootRedirectFallbackTests(unittest.IsolatedAsyncioTestCase):
+    """Verify the defensive fallback when the redirect target looks unsafe."""
+
+    async def test_falls_back_to_anonymous_when_target_has_a_netloc(self):
+        request = MagicMock()
+        unsafe_parsed = MagicMock(netloc="evil.example.com", scheme="")
+        with patch.object(main, "urlparse", return_value=unsafe_parsed):
+            response = await main.opds_root_redirect(
+                request, auth_info=("Bob", "tok", "Bob"))
+        self.assertEqual(response.headers["location"], "/opds/anonymous")
 
 
 if __name__ == "__main__":

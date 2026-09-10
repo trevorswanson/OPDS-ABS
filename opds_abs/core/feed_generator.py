@@ -714,12 +714,17 @@ class BaseFeedGenerator:
         # Get ebook files in optimal batch sizes to avoid overwhelming the server
         batch_size = 5  # Adjust based on server capacity
         tasks = []
+        # Books lacking an id are skipped when building tasks, so this list
+        # is kept in step with tasks (rather than paged_items) to avoid
+        # pairing a later book with an earlier book's download results.
+        books_with_ids = []
 
         for book in paged_items:
             book_id = book.get("id", "")
             if book_id:
                 tasks.append(get_download_urls_from_item(
                     book_id, username=username, token=token))
+                books_with_ids.append(book)
 
         # Process in batches if we have a lot of books
         for i in range(0, len(tasks), batch_size):
@@ -728,9 +733,7 @@ class BaseFeedGenerator:
 
             # Add each book from this batch to the feed
             for j, ebook_info in enumerate(batch_results):
-                book_index = i + j
-                if book_index < len(paged_items):
-                    self.add_book_to_feed(feed, paged_items[book_index], ebook_info, "", token)
+                self.add_book_to_feed(feed, books_with_ids[i + j], ebook_info, "", token)
 
     def get_current_timestamp(self):
         """Get the current timestamp in ISO 8601 format.
