@@ -277,4 +277,4 @@ def log_error(
     if log_traceback:
         logger.exception("%s: %s", log_prefix, str(exc))
     else:
-        logger.error("Error [%s]: %s", log_prefix, str(exc))
+        logger.error("%s: %s", log_prefix, str(exc))

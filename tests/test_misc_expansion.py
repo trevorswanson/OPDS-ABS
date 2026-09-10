@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from lxml import etree
 
 from opds_abs.core.feed_generator import BaseFeedGenerator
+from opds_abs.feeds import library_feed as library_feed_module
 from opds_abs.feeds.library_feed import LibraryFeedGenerator
 from opds_abs.feeds.navigation_feed import NavigationFeedGenerator
 from opds_abs.utils import xml_utils
@@ -223,6 +224,16 @@ class NormalizeBookEbookFormatTests(unittest.TestCase):
         book = {"media": {}}
         self.assertFalse(LibraryFeedGenerator._normalize_book_ebook_format(book))
 
+    def test_existing_format_is_left_untouched_when_ebook_file_present(self):
+        book = {"media": {"ebookFile": {"metadata": {"ext": ".pdf"}}, "ebookFormat": "mobi"}}
+        self.assertTrue(LibraryFeedGenerator._normalize_book_ebook_format(book))
+        self.assertEqual(book["media"]["ebookFormat"], "mobi")
+
+    def test_ebook_file_without_metadata_key_leaves_format_unset(self):
+        book = {"media": {"ebookFile": {"ino": "1"}}}
+        self.assertTrue(LibraryFeedGenerator._normalize_book_ebook_format(book))
+        self.assertNotIn("ebookFormat", book["media"])
+
 
 class GenerateLibraryItemsFeedTests(unittest.IsolatedAsyncioTestCase):
     """Verify the main library items feed flow, including collection filtering."""
@@ -259,14 +270,65 @@ class GenerateLibraryItemsFeedTests(unittest.IsolatedAsyncioTestCase):
                 "alice", "lib-1", {"collection": "c1"}, token="tok")
         self.assertIn("alice's books", response.body.decode())
 
+    async def test_collection_with_no_books_falls_back_to_normal_feed(self):
+        generator = LibraryFeedGenerator()
+        items_data = {"results": [
+            {"id": "b1", "addedAt": 0, "media": {
+                "ebookFormat": "epub", "metadata": {"title": "T"}}}]}
+        with patch(
+                "opds_abs.feeds.library_feed.fetch_from_api",
+                new=AsyncMock(side_effect=[{"name": "Empty"}, items_data])), \
+             patch(
+                "opds_abs.feeds.library_feed.get_download_urls_from_item",
+                new=AsyncMock(return_value=[])):
+            response = await generator.generate_library_items_feed(
+                "alice", "lib-1", {"collection": "c1"}, token="tok")
+        self.assertIn("alice's books", response.body.decode())
+
+    async def test_collection_with_no_ebook_books_falls_back_to_normal_feed(self):
+        generator = LibraryFeedGenerator()
+        collection_data = {"name": "NoEbooks", "books": [{"id": "b1", "media": {}}]}
+        items_data = {"results": [
+            {"id": "b1", "addedAt": 0, "media": {
+                "ebookFormat": "epub", "metadata": {"title": "T"}}}]}
+        with patch(
+                "opds_abs.feeds.library_feed.fetch_from_api",
+                new=AsyncMock(side_effect=[collection_data, items_data])), \
+             patch(
+                "opds_abs.feeds.library_feed.get_download_urls_from_item",
+                new=AsyncMock(return_value=[])):
+            response = await generator.generate_library_items_feed(
+                "alice", "lib-1", {"collection": "c1"}, token="tok")
+        self.assertIn("alice's books", response.body.decode())
+
+    async def test_collection_filter_success_without_pagination(self):
+        generator = LibraryFeedGenerator()
+        collection_data = {
+            "name": "Favorites",
+            "books": [{"id": "b1", "addedAt": 0, "media": {
+                "ebookFormat": "epub", "metadata": {"title": "T", "authorName": "A"}}}],
+        }
+        with patch(
+                "opds_abs.feeds.library_feed.fetch_from_api",
+                new=AsyncMock(return_value=collection_data)), \
+             patch(
+                "opds_abs.feeds.library_feed.get_download_urls_from_item",
+                new=AsyncMock(return_value=[])), \
+             patch.object(library_feed_module, "PAGINATION_ENABLED", False):
+            response = await generator.generate_library_items_feed(
+                "alice", "lib-1", {"collection": "c1"}, token="tok")
+        body = response.body.decode()
+        self.assertIn("Favorites", body)
+        self.assertNotIn("opensearch:startIndex", body)
+
     async def test_special_sort_feed_uses_cached_items_sorted_by_added_at(self):
         generator = LibraryFeedGenerator()
         cached_items = [
             {"id": "old", "addedAt": 1, "media": {"metadata": {"title": "Old"}}},
             {"id": "new", "addedAt": 100, "media": {"metadata": {"title": "New"}}},
         ]
-        with patch(
-                "opds_abs.feeds.library_feed.get_cached_library_items",
+        with patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=cached_items)), \
              patch(
                 "opds_abs.feeds.library_feed.get_download_urls_from_item",
@@ -276,14 +338,32 @@ class GenerateLibraryItemsFeedTests(unittest.IsolatedAsyncioTestCase):
         body = response.body.decode()
         self.assertLess(body.index("New"), body.index("Old"))
 
+    async def test_normal_feed_without_pagination_omits_pagination_metadata(self):
+        generator = LibraryFeedGenerator()
+        items_data = {"results": [
+            {"id": "b1", "addedAt": 0, "media": {
+                "ebookFormat": "epub", "metadata": {"title": "T"}}}]}
+        with patch(
+                "opds_abs.feeds.library_feed.fetch_from_api",
+                new=AsyncMock(return_value=items_data)), \
+             patch(
+                "opds_abs.feeds.library_feed.get_download_urls_from_item",
+                new=AsyncMock(return_value=[])), \
+             patch.object(library_feed_module, "PAGINATION_ENABLED", False):
+            response = await generator.generate_library_items_feed(
+                "alice", "lib-1", {}, token="tok")
+        body = response.body.decode()
+        self.assertIn("alice's books", body)
+        self.assertNotIn("opensearch:startIndex", body)
+
     async def test_special_sort_feed_uses_cached_items_sorted_by_title(self):
         generator = LibraryFeedGenerator()
         cached_items = [
             {"id": "z", "addedAt": 1, "media": {"metadata": {"title": "Zorro"}}},
             {"id": "a", "addedAt": 2, "media": {"metadata": {"title": "Alpha"}}},
         ]
-        with patch(
-                "opds_abs.feeds.library_feed.get_cached_library_items",
+        with patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=cached_items)), \
              patch(
                 "opds_abs.feeds.library_feed.get_download_urls_from_item",

@@ -5,7 +5,7 @@ See ``tests/test_application.py`` for the original suite and
 """
 
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from lxml import etree
 
@@ -63,8 +63,8 @@ class FilterItemsByAuthorIdTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
                 generator, "get_author_by_id",
                 new=AsyncMock(return_value={"name": "Herbert"})), \
-             patch(
-                "opds_abs.feeds.author_feed.get_cached_library_items",
+             patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=items)):
             result = await generator.filter_items_by_author_id("alice", "lib-1", "a1")
         self.assertEqual([b["id"] for b in result], ["b1"])
@@ -74,7 +74,7 @@ class FilterItemsByAuthorIdTests(unittest.IsolatedAsyncioTestCase):
         fetch_mock = AsyncMock(return_value={"results": [book("b1")]})
         with patch.object(
                 generator, "get_author_by_id", new=AsyncMock(return_value={})), \
-             patch("opds_abs.feeds.author_feed.fetch_from_api", new=fetch_mock):
+             patch("opds_abs.core.feed_generator.fetch_from_api", new=fetch_mock):
             result = await generator.filter_items_by_author_id("alice", "lib-1", "a1")
         self.assertEqual([b["id"] for b in result], ["b1"])
         fetch_mock.assert_awaited_once()
@@ -84,7 +84,7 @@ class FilterItemsByAuthorIdTests(unittest.IsolatedAsyncioTestCase):
         fetch_mock = AsyncMock(return_value={"results": [book("b1")]})
         with patch.object(
                 generator, "get_author_by_id", new=AsyncMock(side_effect=RuntimeError("boom"))), \
-             patch("opds_abs.feeds.author_feed.fetch_from_api", new=fetch_mock):
+             patch("opds_abs.core.feed_generator.fetch_from_api", new=fetch_mock):
             result = await generator.filter_items_by_author_id("alice", "lib-1", "a1")
         self.assertEqual([b["id"] for b in result], ["b1"])
 
@@ -147,6 +147,24 @@ class GenerateAuthorItemsFeedTests(unittest.IsolatedAsyncioTestCase):
                 new=AsyncMock(side_effect=RuntimeError("boom"))):
             response = await generator.generate_author_items_feed("alice", "lib-1", "a1")
         self.assertEqual(response.status_code, 500)
+
+    async def test_pagination_disabled_omits_pagination_links(self):
+        generator = AuthorFeedGenerator()
+        items = [book("b1"), book("b2")]
+        with patch.object(
+                generator, "_prepare_author_feed",
+                new=AsyncMock(
+                    return_value=("Herbert", items, generator.create_base_feed()))), \
+             patch.object(
+                generator, "paginate_page_items",
+                return_value=(items, 1, 1, True)), \
+             patch(
+                "opds_abs.core.feed_generator.get_download_urls_from_item",
+                new=AsyncMock(return_value=[])):
+            response = await generator.generate_author_items_feed("alice", "lib-1", "a1")
+        body = response.body.decode()
+        self.assertNotIn('rel="next"', body)
+        self.assertNotIn('rel="previous"', body)
 
 
 class AddAuthorToFeedTests(unittest.TestCase):
@@ -289,6 +307,13 @@ class GenerateAuthorsFeedTests(unittest.IsolatedAsyncioTestCase):
             response = await generator.generate_authors_feed("alice", "lib-1")
         self.assertIn(b"Error processing authors", response.body)
 
+    async def test_unexpected_error_outside_inner_try_returns_error_response(self):
+        generator = AuthorFeedGenerator()
+        with patch.object(
+                generator, "create_base_feed", side_effect=RuntimeError("boom")):
+            response = await generator.generate_authors_feed("alice", "lib-1")
+        self.assertEqual(response.status_code, 500)
+
 
 # ---------------------------------------------------------------------------
 # CollectionFeedGenerator
@@ -305,14 +330,23 @@ class CollectionDetailsAndFilterTests(unittest.IsolatedAsyncioTestCase):
             result = await generator.get_collection_details("alice", "c1")
         self.assertIsNone(result)
 
+    async def test_get_collection_details_returns_data_on_success(self):
+        generator = CollectionFeedGenerator()
+        details = {"name": "Favorites", "books": [{"id": "b1"}]}
+        with patch(
+                "opds_abs.feeds.collection_feed.fetch_from_api",
+                new=AsyncMock(return_value=details)):
+            result = await generator.get_collection_details("alice", "c1")
+        self.assertEqual(result, details)
+
     async def test_filter_by_collection_uses_cached_items(self):
         generator = CollectionFeedGenerator()
         details = {"name": "Favorites", "books": [{"id": "b1"}]}
         items = [book("b1"), book("b2")]
         with patch.object(
                 generator, "get_collection_details", new=AsyncMock(return_value=details)), \
-             patch(
-                "opds_abs.feeds.collection_feed.get_cached_library_items",
+             patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=items)):
             result = await generator.filter_items_by_collection_id("alice", "lib-1", "c1")
         self.assertEqual([b["id"] for b in result], ["b1"])
@@ -324,8 +358,8 @@ class CollectionDetailsAndFilterTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
                 generator, "get_collection_details",
                 new=AsyncMock(side_effect=AssertionError("should not be called"))), \
-             patch(
-                "opds_abs.feeds.collection_feed.get_cached_library_items",
+             patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=items)):
             result = await generator.filter_items_by_collection_id(
                 "alice", "lib-1", "c1", collection_details=details)
@@ -335,7 +369,7 @@ class CollectionDetailsAndFilterTests(unittest.IsolatedAsyncioTestCase):
         generator = CollectionFeedGenerator()
         fetch_mock = AsyncMock(return_value={"results": [book("b1")]})
         with patch.object(generator, "get_collection_details", new=AsyncMock(return_value=None)), \
-             patch("opds_abs.feeds.collection_feed.fetch_from_api", new=fetch_mock):
+             patch("opds_abs.core.feed_generator.fetch_from_api", new=fetch_mock):
             result = await generator.filter_items_by_collection_id("alice", "lib-1", "c1")
         self.assertEqual([b["id"] for b in result], ["b1"])
 
@@ -352,7 +386,7 @@ class CollectionDetailsAndFilterTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
                 generator, "get_collection_details",
                 new=AsyncMock(side_effect=RuntimeError("boom"))), \
-             patch("opds_abs.feeds.collection_feed.fetch_from_api", new=fetch_mock):
+             patch("opds_abs.core.feed_generator.fetch_from_api", new=fetch_mock):
             result = await generator.filter_items_by_collection_id("alice", "lib-1", "c1")
         self.assertEqual([b["id"] for b in result], ["b1"])
 
@@ -390,6 +424,24 @@ class GenerateCollectionItemsFeedTests(unittest.IsolatedAsyncioTestCase):
             response = await generator.generate_collection_items_feed("alice", "lib-1", "c1")
         self.assertEqual(response.status_code, 500)
 
+    async def test_pagination_disabled_omits_pagination_links(self):
+        generator = CollectionFeedGenerator()
+        items = [book("b1"), book("b2")]
+        with patch.object(
+                generator, "_prepare_collection_feed",
+                new=AsyncMock(
+                    return_value=("Favorites", items, generator.create_base_feed()))), \
+             patch.object(
+                generator, "paginate_page_items",
+                return_value=(items, 1, 1, True)), \
+             patch(
+                "opds_abs.core.feed_generator.get_download_urls_from_item",
+                new=AsyncMock(return_value=[])):
+            response = await generator.generate_collection_items_feed("alice", "lib-1", "c1")
+        body = response.body.decode()
+        self.assertNotIn('rel="next"', body)
+        self.assertNotIn('rel="previous"', body)
+
 
 class AddCollectionToFeedTests(unittest.TestCase):
     """Verify collection entry construction and default cover fallback."""
@@ -402,6 +454,18 @@ class AddCollectionToFeedTests(unittest.TestCase):
         body = etree.tostring(feed).decode()
         self.assertIn("collections.png", body)
         self.assertIn("Collection with 0 ebooks", body)
+
+    def test_default_cover_used_when_ebook_books_lack_an_id(self):
+        generator = CollectionFeedGenerator()
+        feed = generator.create_base_feed()
+        generator.add_collection_to_feed(
+            "alice", "lib-1", feed, {
+                "id": "c1", "name": "Favorites",
+                "books": [{"media": {"ebookFormat": "epub"}}],
+            })
+        body = etree.tostring(feed).decode()
+        self.assertIn("collections.png", body)
+        self.assertIn("Collection with 1 ebook<", body)
 
     def test_raises_feed_generation_error_on_key_error(self):
         generator = CollectionFeedGenerator()
@@ -490,6 +554,29 @@ class GenerateCollectionsFeedTests(unittest.IsolatedAsyncioTestCase):
             response = await generator.generate_collections_feed("alice", "lib-1")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Collections not found", response.body)
+
+    async def test_unexpected_error_returns_error_response(self):
+        generator = CollectionFeedGenerator()
+        with patch.object(
+                generator, "get_collections", new=AsyncMock(side_effect=RuntimeError("boom"))):
+            response = await generator.generate_collections_feed("alice", "lib-1")
+        self.assertEqual(response.status_code, 500)
+
+    async def test_collection_with_no_ebooks_is_excluded_without_error(self):
+        generator = CollectionFeedGenerator()
+        collections = [{"id": "c1", "name": "Empty"}]
+        collection_data = {
+            "id": "c1", "name": "Empty",
+            "books": [{"id": "b1", "media": {}}],
+        }
+        with patch.object(
+                generator, "get_collections", new=AsyncMock(return_value=collections)), \
+             patch(
+                "opds_abs.feeds.collection_feed.fetch_from_api",
+                new=AsyncMock(return_value=collection_data)):
+            response = await generator.generate_collections_feed("alice", "lib-1")
+        self.assertNotIn(b"Empty", response.body)
+        self.assertNotIn(b"Error retrieving some collections", response.body)
 
     async def test_get_collections_raises_resource_not_found(self):
         generator = CollectionFeedGenerator()
@@ -583,8 +670,8 @@ class FilterItemsBySeriesIdTests(unittest.IsolatedAsyncioTestCase):
         with patch(
                 "opds_abs.feeds.series_feed.get_cached_series_details",
                 new=AsyncMock(return_value=details)), \
-             patch(
-                "opds_abs.feeds.series_feed.get_cached_library_items",
+             patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=items)):
             filtered, series_details = await generator.filter_items_by_series_id(
                 "alice", "lib-1", "s1")
@@ -597,7 +684,7 @@ class FilterItemsBySeriesIdTests(unittest.IsolatedAsyncioTestCase):
         with patch(
                 "opds_abs.feeds.series_feed.get_cached_series_details",
                 new=AsyncMock(return_value=None)), \
-             patch("opds_abs.feeds.series_feed.fetch_from_api", new=fetch_mock):
+             patch("opds_abs.core.feed_generator.fetch_from_api", new=fetch_mock):
             filtered, series_details = await generator.filter_items_by_series_id(
                 "alice", "lib-1", "s1")
         self.assertEqual([b["id"] for b in filtered], ["b1"])
@@ -612,11 +699,11 @@ class FilterItemsBySeriesIdTests(unittest.IsolatedAsyncioTestCase):
         with patch(
                 "opds_abs.feeds.series_feed.get_cached_series_details",
                 new=AsyncMock(return_value=details)), \
-             patch(
-                "opds_abs.feeds.series_feed.get_cached_library_items",
+             patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=cached_items)), \
              patch(
-                "opds_abs.feeds.series_feed.fetch_from_api",
+                "opds_abs.core.feed_generator.fetch_from_api",
                 new=AsyncMock(return_value=api_items)):
             filtered, series_details = await generator.filter_items_by_series_id(
                 "alice", "lib-1", "s1")
@@ -628,7 +715,7 @@ class FilterItemsBySeriesIdTests(unittest.IsolatedAsyncioTestCase):
         with patch(
                 "opds_abs.feeds.series_feed.get_cached_series_details",
                 new=AsyncMock(side_effect=RuntimeError("boom"))), \
-             patch("opds_abs.feeds.series_feed.fetch_from_api", new=fetch_mock):
+             patch("opds_abs.core.feed_generator.fetch_from_api", new=fetch_mock):
             filtered, series_details = await generator.filter_items_by_series_id(
                 "alice", "lib-1", "s1")
         self.assertEqual([b["id"] for b in filtered], ["b1"])
@@ -641,8 +728,8 @@ class ResolveSeriesAuthorNameTests(unittest.IsolatedAsyncioTestCase):
     async def test_uses_library_item_author_name(self):
         generator = SeriesFeedGenerator()
         items = [book("b1", author="Herbert")]
-        with patch(
-                "opds_abs.feeds.series_feed.get_cached_library_items",
+        with patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=items)):
             result = await generator._resolve_series_author_name(
                 "alice", "lib-1", "b1", {}, None)
@@ -650,9 +737,19 @@ class ResolveSeriesAuthorNameTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_falls_back_to_metadata_when_book_not_in_library_items(self):
         generator = SeriesFeedGenerator()
-        with patch(
-                "opds_abs.feeds.series_feed.get_cached_library_items",
+        with patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=[])):
+            result = await generator._resolve_series_author_name(
+                "alice", "lib-1", "b1", {"authorName": "Metadata Author"}, None)
+        self.assertEqual(result, "Metadata Author")
+
+    async def test_falls_back_to_metadata_when_no_library_item_matches(self):
+        generator = SeriesFeedGenerator()
+        items = [book("other-book", author="Someone Else")]
+        with patch.object(
+                generator, "get_all_cached_library_items",
+                new=AsyncMock(return_value=items)):
             result = await generator._resolve_series_author_name(
                 "alice", "lib-1", "b1", {"authorName": "Metadata Author"}, None)
         self.assertEqual(result, "Metadata Author")
@@ -665,8 +762,8 @@ class ResolveSeriesAuthorNameTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_swallows_library_item_lookup_error(self):
         generator = SeriesFeedGenerator()
-        with patch(
-                "opds_abs.feeds.series_feed.get_cached_library_items",
+        with patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(side_effect=RuntimeError("boom"))):
             result = await generator._resolve_series_author_name(
                 "alice", "lib-1", "b1", {"authorName": "Metadata Author"}, None)
@@ -684,8 +781,8 @@ class AddSeriesToFeedTests(unittest.IsolatedAsyncioTestCase):
             "books": [book("b1", author="Herbert")],
             "authorName": "Herbert",
         }
-        with patch(
-                "opds_abs.feeds.series_feed.get_cached_library_items",
+        with patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=[book("b1", author="Herbert")])):
             await generator.add_series_to_feed("alice", "lib-1", feed, series)
         body = etree.tostring(feed).decode()
@@ -695,8 +792,8 @@ class AddSeriesToFeedTests(unittest.IsolatedAsyncioTestCase):
         generator = SeriesFeedGenerator()
         feed = generator.create_base_feed()
         series = {"id": "s1", "name": "Dune", "books": [book("b1", author="Herbert")]}
-        with patch(
-                "opds_abs.feeds.series_feed.get_cached_library_items",
+        with patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=[book("b1", author="Herbert")])):
             await generator.add_series_to_feed("alice", "lib-1", feed, series, token="tok")
         body = etree.tostring(feed).decode()
@@ -752,8 +849,8 @@ class GenerateSeriesFeedsTests(unittest.IsolatedAsyncioTestCase):
         ]}
         with patch(
                 "opds_abs.feeds.series_feed.fetch_from_api", new=AsyncMock(return_value=data)), \
-             patch(
-                "opds_abs.feeds.series_feed.get_cached_library_items",
+             patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=[book("b1", author="Herbert")])):
             response = await generator.generate_series_feed("alice", "lib-1")
         self.assertIn("Dune", response.body.decode())
@@ -775,12 +872,12 @@ class SearchFeedGenerationTests(unittest.IsolatedAsyncioTestCase):
              patch(
                 "opds_abs.feeds.search_feed.get_cached_search_results",
                 new=search_results_mock), \
-             patch(
-                "opds_abs.feeds.search_feed.get_cached_library_items",
+             patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=[])):
             await generator.generate_search_feed("alice", "lib-1", {"q": "dune"})
         get_token.assert_called_once_with("alice")
-        self.assertEqual(search_results_mock.call_args.kwargs["token"], "cached-tok")
+        self.assertEqual(search_results_mock.call_args.args[-1].token, "cached-tok")
 
     async def test_token_in_params_is_used_over_cache(self):
         generator = SearchFeedGenerator()
@@ -790,13 +887,13 @@ class SearchFeedGenerationTests(unittest.IsolatedAsyncioTestCase):
              patch(
                 "opds_abs.feeds.search_feed.get_cached_search_results",
                 new=search_results_mock), \
-             patch(
-                "opds_abs.feeds.search_feed.get_cached_library_items",
+             patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=[])):
             await generator.generate_search_feed(
                 "alice", "lib-1", {"q": "dune", "token": "param-tok"})
         get_token.assert_not_called()
-        self.assertEqual(search_results_mock.call_args.kwargs["token"], "param-tok")
+        self.assertEqual(search_results_mock.call_args.args[-1].token, "param-tok")
 
     async def test_full_search_adds_books_series_and_authors(self):
         generator = SearchFeedGenerator()
@@ -812,8 +909,8 @@ class SearchFeedGenerationTests(unittest.IsolatedAsyncioTestCase):
         with patch(
                 "opds_abs.feeds.search_feed.get_cached_search_results",
                 new=AsyncMock(return_value=search_data)), \
-             patch(
-                "opds_abs.feeds.search_feed.get_cached_library_items",
+             patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=cached_items)), \
              patch(
                 "opds_abs.feeds.search_feed.get_download_urls_from_item",
@@ -853,6 +950,19 @@ class ProcessSingleBookTests(unittest.IsolatedAsyncioTestCase):
         body = etree.tostring(feed).decode()
         self.assertIn("Dune", body)
 
+    async def test_uses_search_result_metadata_when_not_cached(self):
+        generator = SearchFeedGenerator()
+        feed = generator.create_base_feed()
+        result = {"libraryItem": {
+            "id": "b1", "addedAt": 0, "media": {
+                "ebookFormat": "epub", "metadata": {"title": "Uncached Title"}}}}
+        with patch(
+                "opds_abs.feeds.search_feed.get_download_urls_from_item",
+                new=AsyncMock(return_value=[{"ino": "1"}])):
+            await generator._process_single_book(feed, result, "alice", {})
+        body = etree.tostring(feed).decode()
+        self.assertIn("Uncached Title", body)
+
 
 class FindSeriesAuthorTests(unittest.TestCase):
     """Verify the author-resolution precedence for series search results."""
@@ -887,6 +997,36 @@ class FindSeriesAuthorTests(unittest.TestCase):
         result = generator._find_series_author("s1", [{"id": "missing"}], [], {})
         self.assertEqual(result, "Unknown Author")
 
+    def test_returns_unknown_when_series_books_have_no_ids(self):
+        generator = SearchFeedGenerator()
+        result = generator._find_series_author(
+            "s1", [{"title": "no id"}], [book("b1", author="Herbert")], {})
+        self.assertEqual(result, "Unknown Author")
+
+    def test_skips_non_matching_cached_items_before_finding_author(self):
+        generator = SearchFeedGenerator()
+        other_item = book("other")
+        matching_item = book("b1", author="Herbert")
+        result = generator._find_series_author(
+            "s1", [{"id": "b1"}], [other_item, matching_item], {})
+        self.assertEqual(result, "Herbert")
+
+    def test_falls_back_to_unknown_when_authors_list_is_empty(self):
+        generator = SearchFeedGenerator()
+        item = book("b1")
+        item["media"]["metadata"]["authorName"] = None
+        item["media"]["metadata"]["authors"] = []
+        result = generator._find_series_author("s1", [{"id": "b1"}], [item], {})
+        self.assertEqual(result, "Unknown Author")
+
+    def test_falls_back_to_unknown_when_first_author_has_no_name(self):
+        generator = SearchFeedGenerator()
+        item = book("b1")
+        item["media"]["metadata"]["authorName"] = None
+        item["media"]["metadata"]["authors"] = [{}]
+        result = generator._find_series_author("s1", [{"id": "b1"}], [item], {})
+        self.assertEqual(result, "Unknown Author")
+
 
 class BuildSeriesAuthorMapTests(unittest.TestCase):
     """Verify author-frequency aggregation per series."""
@@ -910,6 +1050,89 @@ class BuildSeriesAuthorMapTests(unittest.TestCase):
         result = generator._build_series_author_map(items, {"s1"})
         self.assertEqual(result, {})
 
+    def test_ignores_series_not_in_the_ebooks_set(self):
+        generator = SearchFeedGenerator()
+        items = [{"media": {"metadata": {
+            "authorName": "Herbert", "series": [{"id": "s2"}]}}}]
+        result = generator._build_series_author_map(items, {"s1"})
+        self.assertEqual(result, {})
+
+
+class ExtractSeriesWithEbooksTests(unittest.TestCase):
+    """Verify series search results are filtered down to those with ebooks."""
+
+    def test_series_without_ebook_books_is_excluded(self):
+        generator = SearchFeedGenerator()
+        search_results = {"series": [
+            {"series": {"id": "s1", "name": "No Ebooks"}, "books": [{"media": {}}]},
+            {"series": {"id": "s2", "name": "Has Ebooks"},
+             "books": [{"media": {"ebookFormat": "epub"}}]},
+        ]}
+        series_with_ebooks, series_ids = generator._extract_series_with_ebooks(search_results)
+        self.assertEqual([s["id"] for s in series_with_ebooks], ["s2"])
+        self.assertEqual(series_ids, {"s2"})
+
+
+class ExtractAuthorDataFromSearchTests(unittest.TestCase):
+    """Verify author search results without a name are skipped."""
+
+    def test_skips_author_result_missing_name(self):
+        generator = SearchFeedGenerator()
+        search_data = {"authors": [{"id": "a1"}, {"name": "Herbert"}]}
+        names, data_by_name = generator._extract_author_data_from_search(search_data)
+        self.assertEqual(names, {"Herbert"})
+        self.assertEqual(set(data_by_name), {"Herbert"})
+
+
+class CountEbooksPerAuthorTests(unittest.TestCase):
+    """Verify per-author ebook counting skips non-matching or ebook-less items."""
+
+    def test_skips_items_with_unmatched_or_missing_author(self):
+        generator = SearchFeedGenerator()
+        items = [
+            book("b1", author="Herbert"),
+            book("b2", author="Someone Else"),
+            {"media": {"metadata": {}}},
+        ]
+        counts = generator._count_ebooks_per_author(items, {"Herbert"})
+        self.assertEqual(counts, {"Herbert": 1})
+
+    def test_skips_matching_author_without_ebook(self):
+        generator = SearchFeedGenerator()
+        items = [{"media": {"metadata": {"authorName": "Herbert"}}}]
+        counts = generator._count_ebooks_per_author(items, {"Herbert"})
+        self.assertEqual(counts, {})
+
+
+class AddAuthorToFeedHelperTests(unittest.TestCase):
+    """Verify the low-level author-to-feed helper's guard conditions."""
+
+    def test_missing_author_data_does_not_prevent_the_feed_call(self):
+        # Not expected in practice (author_ebook_counts and author_data_by_name
+        # are always built from the same search_author_names set), but this
+        # documents/covers the guard's actual behavior: it only skips
+        # annotating author_data, not the add_author_to_feed call itself.
+        generator = SearchFeedGenerator()
+        author_generator = MagicMock()
+        author_context = {
+            "author_generator": author_generator, "author_data_by_name": {},
+            "feed": "feed", "username": "alice", "library_id": "lib-1", "token": None,
+        }
+        generator._add_author_to_feed("Unknown", 3, author_context)
+        author_generator.add_author_to_feed.assert_called_once_with(
+            "alice", "lib-1", "feed", None, token=None)
+
+    def test_no_op_when_ebook_count_is_zero(self):
+        generator = SearchFeedGenerator()
+        author_generator = MagicMock()
+        author_context = {
+            "author_generator": author_generator,
+            "author_data_by_name": {"Herbert": {"name": "Herbert"}},
+            "feed": "feed", "username": "alice", "library_id": "lib-1", "token": None,
+        }
+        generator._add_author_to_feed("Herbert", 0, author_context)
+        author_generator.add_author_to_feed.assert_not_called()
+
 
 class ProcessAuthorsTests(unittest.IsolatedAsyncioTestCase):
     """Verify author search-result aggregation and feed insertion."""
@@ -919,7 +1142,11 @@ class ProcessAuthorsTests(unittest.IsolatedAsyncioTestCase):
         feed = generator.create_base_feed()
         search_data = {"authors": [{"name": "Herbert"}, {"name": "NoBooks"}]}
         cached_items = [book("b1", author="Herbert")]
-        await generator._process_authors(feed, search_data, "alice", "lib-1", cached_items)
+        context = {
+            "feed": feed, "search_data": search_data, "username": "alice",
+            "library_id": "lib-1", "cached_library_items": cached_items, "token": None,
+        }
+        await generator._process_authors(context)
         body = etree.tostring(feed).decode()
         self.assertIn("Herbert", body)
         self.assertNotIn("NoBooks", body)
@@ -927,7 +1154,11 @@ class ProcessAuthorsTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_op_when_no_authors_in_search_data(self):
         generator = SearchFeedGenerator()
         feed = generator.create_base_feed()
-        await generator._process_authors(feed, {}, "alice", "lib-1", [])
+        context = {
+            "feed": feed, "search_data": {}, "username": "alice",
+            "library_id": "lib-1", "cached_library_items": [], "token": None,
+        }
+        await generator._process_authors(context)
         self.assertEqual(len(feed.findall("entry")), 0)
 
 

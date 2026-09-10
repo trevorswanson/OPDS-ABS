@@ -287,7 +287,14 @@ exclude-too-few-public-methods=
 ignored-parents=
 
 # Maximum number of arguments for function / method.
-max-args=5
+# 6 (not the default 5): a small, fixed group of route-level feed-generator
+# methods (e.g. generate_author_items_feed, generate_collection_items_feed)
+# need exactly username, library_id, a resource id, token, page, and
+# per_page - six genuinely distinct, non-redundant pieces of request state.
+# Bundling page/per_page into a dict there would just move the complexity
+# elsewhere and break consistency with paginate_page_items() and friends,
+# which take them as plain arguments throughout the rest of the codebase.
+max-args=6
 
 # Maximum number of attributes for a class (see R0902).
 max-attributes=7
@@ -305,7 +312,8 @@ max-locals=15
 max-parents=7
 
 # Maximum number of positional arguments for function / method.
-max-positional-arguments=5
+# See the max-args comment above for why this is 6, not the default 5.
+max-positional-arguments=6
 
 # Maximum number of public methods for a class (see R0904).
 max-public-methods=20

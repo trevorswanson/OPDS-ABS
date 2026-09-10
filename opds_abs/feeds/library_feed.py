@@ -11,7 +11,6 @@ from fastapi.responses import RedirectResponse
 from opds_abs.core.feed_generator import BaseFeedGenerator
 from opds_abs.api.client import fetch_from_api, get_download_urls_from_item
 from opds_abs.utils import dict_to_xml
-from opds_abs.utils.cache_utils import get_cached_library_items
 from opds_abs.utils.error_utils import log_error
 from opds_abs.config import ITEMS_PER_PAGE, PAGINATION_ENABLED
 
@@ -329,32 +328,18 @@ class LibraryFeedGenerator(BaseFeedGenerator):
 
         sorted_books, total_books = self._finalize_collection_books(filtered_books, context)
 
-        # Generate feed using these books directly
-        feed = self.create_base_feed(
-            username, context["library_id"], context["current_path_with_page"], token)
-
-        # Create feed metadata using dictionary approach
-        feed_data = {
-            "id": {"_text": context["library_id"]},
-            "author": {
-                "name": {"_text": "OPDS Audiobookshelf"}
-            },
-            "title": {
-                "_text": (
-                    f"{username}'s books in collection: "
-                    f"{collection_data.get('name', 'Unknown')}"
-                )
-            }
-        }
-        dict_to_xml(feed, feed_data)
+        # Generate feed using these books directly, with its standard metadata
+        title_text = (
+            f"{username}'s books in collection: {collection_data.get('name', 'Unknown')}")
+        feed = self.create_items_feed(
+            username, context["library_id"], title_text,
+            current_path=context["current_path_with_page"], token=token)
 
         # Add pagination metadata and links
         if not context["no_pagination"]:
             self.add_pagination_metadata(
                 feed, context["page"], context["items_per_page"], total_books)
-            self.add_pagination_links(
-                feed, context["current_path"].rstrip('&?'), context["page"],
-                context["items_per_page"], total_books, token=token)
+            self.add_pagination_links(feed, context, total_books)
 
         # Get ebook files for each book and add them to the feed
         ebook_inos_list = await self._get_ebook_inos_for_books(sorted_books, username, token)
@@ -440,31 +425,25 @@ class LibraryFeedGenerator(BaseFeedGenerator):
             logger.debug("Using cached library items for %s feed", sort_param)
 
             # Get library items from cache utility
-            cached_items = await get_cached_library_items(
-                fetch_from_api,
-                self.filter_items,
-                username,
-                library_id,
-                token=token
-            )
+            cached_items = await self.get_all_cached_library_items(
+                username, library_id, token=token)
 
             # sorted() returns a new list without mutating the cached items,
             # so no copy of the (potentially large) cached list is needed here.
             if sort_param == 'addedAt':
                 # Sort by addedAt in descending order (newest first)
-                library_items = sorted(
+                return sorted(
                     cached_items,
                     key=lambda x: x.get('addedAt', 0),
                     reverse=True
                 )
-            elif sort_param == 'media.metadata.title':
-                # Sort by title in ascending order
-                library_items = sorted(
-                    cached_items,
-                    key=lambda x: x.get('media', {}).get('metadata', {}).get('title', '').lower(),
-                    reverse=False
-                )
-            return library_items
+            # is_special_feed guarantees sort_param is 'media.metadata.title' here.
+            # Sort by title in ascending order
+            return sorted(
+                cached_items,
+                key=lambda x: x.get('media', {}).get('metadata', {}).get('title', '').lower(),
+                reverse=False
+            )
 
         # For feeds with other filters or sorts, use the regular API call
         logger.debug("Fetching library items from API with params: %s", params)
@@ -498,27 +477,16 @@ class LibraryFeedGenerator(BaseFeedGenerator):
         paginated_items = library_items if no_pagination else self.paginate_results(
             library_items, context["start_index"], context["items_per_page"])
 
-        # Create feed with pagination-aware path
-        feed = self.create_base_feed(
-            username, context["library_id"], context["current_path_with_page"], token)
-
-        # Create feed metadata using dictionary approach
-        feed_data = {
-            "id": {"_text": context["library_id"]},
-            "author": {
-                "name": {"_text": "OPDS Audiobookshelf"}
-            },
-            "title": {"_text": f"{username}'s books"}
-        }
-        dict_to_xml(feed, feed_data)
+        # Create feed with pagination-aware path and standard metadata
+        feed = self.create_items_feed(
+            username, context["library_id"], f"{username}'s books",
+            current_path=context["current_path_with_page"], token=token)
 
         # Add pagination metadata and links
         if not no_pagination:
             self.add_pagination_metadata(
                 feed, context["page"], context["items_per_page"], total_items)
-            self.add_pagination_links(
-                feed, context["current_path"].rstrip('&?'), context["page"],
-                context["items_per_page"], total_items, token=token)
+            self.add_pagination_links(feed, context, total_items)
 
         ebook_inos_list = await self._get_ebook_inos_for_books(paginated_items, username, token)
         for book, ebook_inos in zip(paginated_items, ebook_inos_list):

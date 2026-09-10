@@ -9,7 +9,7 @@ metrics from a `coverage json` report explicitly.
 import json
 import sys
 
-FLOOR = 90.0
+FLOOR = 95.0
 
 
 def main():

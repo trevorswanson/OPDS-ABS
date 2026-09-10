@@ -12,10 +12,12 @@ from lxml import etree
 from fastapi.responses import Response
 
 # Local application imports
-from opds_abs.api.client import get_download_urls_from_item
+from opds_abs.api.client import fetch_from_api, get_download_urls_from_item
 from opds_abs.config import ITEMS_PER_PAGE, PAGINATION_ENABLED
 from opds_abs.utils import dict_to_xml
+from opds_abs.utils.cache_utils import get_cached_library_items
 from opds_abs.utils.error_utils import FeedGenerationError, log_error
+from opds_abs.utils.item_utils import filter_ebook_items
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -432,20 +434,108 @@ class BaseFeedGenerator:
         Raises:
             FeedGenerationError: If there's an error filtering the items.
         """
-        try:
-            n = 1
-            filtered_results = []
-            for result in data.get("results", []):
-                media = result.get("media", {})
-                if "ebookFormat" in media and media.get("ebookFormat", None):
-                    result.update({"opds_seq": n})
-                    n += 1
-                    filtered_results.append(result)
+        return filter_ebook_items(data)
 
-            return filtered_results
-        except Exception as e:
-            log_error(e, context="Filtering items for ebooks")
-            raise FeedGenerationError(f"Error filtering items: {str(e)}") from e
+    async def get_all_cached_library_items(self, username, library_id, token=None):
+        """Fetch (and cache) all of a library's ebook items, for reuse across filters.
+
+        This is the fetch_from_api/filter_ebook_items pairing every "filter
+        items by X" fallback in the feed generators needs; wrapping it here
+        avoids repeating that pairing at each call site.
+
+        Args:
+            username (str): The username of the authenticated user.
+            library_id (str): ID of the library to fetch items from.
+            token (str, optional): Authentication token for Audiobookshelf.
+
+        Returns:
+            list: All of the library's items that have an ebook file.
+        """
+        return await get_cached_library_items(fetch_from_api, username, library_id, token=token)
+
+    async def fetch_items_with_filter(self, library_id, params, username, token=None):
+        """Fetch library items directly from the items endpoint with the given filter params.
+
+        Shared fallback used when a filtered items query can't be served from
+        cached library items (e.g. missing author/collection/series details,
+        or an error while filtering locally).
+
+        Args:
+            library_id (str): ID of the library to fetch items from.
+            params (dict): Query parameters for the items endpoint (e.g. a filter).
+            username (str): The username of the authenticated user.
+            token (str, optional): Authentication token for Audiobookshelf.
+
+        Returns:
+            list: The library items matching the filter, already ebook-filtered.
+        """
+        data = await fetch_from_api(
+            f"/libraries/{library_id}/items",
+            params,
+            username=username,
+            token=token
+        )
+        return self.filter_items(data)
+
+    def create_items_feed(self, username, library_id, title_text, current_path=None, token=None):
+        """Create a base feed with the standard id/author/title metadata for an items listing.
+
+        Shared by feed types (author items, series items, library items)
+        whose top-level metadata is just the library_id, the fixed "OPDS
+        Audiobookshelf" author name, and a feed-specific title.
+
+        Args:
+            username (str): The username requesting the feed.
+            library_id (str): The ID of the library the feed is for.
+            title_text (str): The feed's title text.
+            current_path (str, optional): Current path for pagination links.
+            token (str, optional): Authentication token for Audiobookshelf.
+
+        Returns:
+            Element: The feed with metadata already added.
+        """
+        feed = self.create_base_feed(username, library_id, current_path, token)
+        feed_data = {
+            "id": {"_text": library_id},
+            "author": {
+                "name": {"_text": "OPDS Audiobookshelf"}
+            },
+            "title": {"_text": title_text}
+        }
+        dict_to_xml(feed, feed_data)
+        return feed
+
+    @staticmethod
+    def build_listing_entry_links(subsection_href, cover_url):
+        """Build the [subsection link, cover image link] pair used by listing entries.
+
+        Shared by author and collection listing entries, whose "link" list
+        is otherwise identical: a subsection link to the item's own feed,
+        followed by its cover image link.
+
+        Args:
+            subsection_href (str): URL to the author's or collection's items feed.
+            cover_url (str): The cover image URL for the entry.
+
+        Returns:
+            list: The two-link list ready for an entry's "link" key.
+        """
+        return [
+            {
+                "_attrs": {
+                    "href": subsection_href,
+                    "rel": "subsection",
+                    "type": "application/atom+xml;profile=opds-catalog"
+                }
+            },
+            {
+                "_attrs": {
+                    "href": cover_url,
+                    "rel": "http://opds-spec.org/image",
+                    "type": "image/jpeg"
+                }
+            }
+        ]
 
     def sort_results(self, data):
         """Sort results based on the opds_seq field.
@@ -544,18 +634,21 @@ class BaseFeedGenerator:
             }
         }
 
-    def add_pagination_links(
-            self, feed, current_path, page, items_per_page, total_items, token=None):
+    def add_pagination_links(self, feed, context, total_items):
         """Add next/previous pagination links to the feed.
 
         Args:
-            feed (Element): The XML feed to add pagination links to
-            current_path (str): Current path excluding query parameters
-            page (int): Current page number (1-based)
-            items_per_page (int): Number of items per page
-            total_items (int): Total number of items
-            token (str, optional): Authentication token
+            feed (Element): The XML feed to add pagination links to.
+            context (dict): Pagination context with current_path (query
+                parameters already stripped), page, items_per_page, and
+                token (see _compute_pagination_context()).
+            total_items (int): Total number of items.
         """
+        current_path = context["current_path"].rstrip('&?')
+        page = context["page"]
+        items_per_page = context["items_per_page"]
+        token = context.get("token")
+
         total_pages = (total_items + items_per_page - 1) // items_per_page  # Ceiling division
 
         link_ctx = {
@@ -714,12 +807,17 @@ class BaseFeedGenerator:
         # Get ebook files in optimal batch sizes to avoid overwhelming the server
         batch_size = 5  # Adjust based on server capacity
         tasks = []
+        # Books lacking an id are skipped when building tasks, so this list
+        # is kept in step with tasks (rather than paged_items) to avoid
+        # pairing a later book with an earlier book's download results.
+        books_with_ids = []
 
         for book in paged_items:
             book_id = book.get("id", "")
             if book_id:
                 tasks.append(get_download_urls_from_item(
                     book_id, username=username, token=token))
+                books_with_ids.append(book)
 
         # Process in batches if we have a lot of books
         for i in range(0, len(tasks), batch_size):
@@ -728,9 +826,7 @@ class BaseFeedGenerator:
 
             # Add each book from this batch to the feed
             for j, ebook_info in enumerate(batch_results):
-                book_index = i + j
-                if book_index < len(paged_items):
-                    self.add_book_to_feed(feed, paged_items[book_index], ebook_info, "", token)
+                self.add_book_to_feed(feed, books_with_ids[i + j], ebook_info, "", token)
 
     def get_current_timestamp(self):
         """Get the current timestamp in ISO 8601 format.

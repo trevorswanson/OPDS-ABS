@@ -552,7 +552,6 @@ async def opds_root(
         raise
     except Exception as e:
         context = f"Generating root feed for user {username}"
-        log_error(e, context=context)
         return handle_exception(e, context=context)
 
 
@@ -591,7 +590,6 @@ async def opds_nav(
         raise
     except Exception as e:
         context = f"Generating navigation feed for user {username}, library {library_id}"
-        log_error(e, context=context)
         return handle_exception(e, context=context)
 
 
@@ -636,7 +634,6 @@ async def opds_search(
         raise
     except Exception as e:
         context = f"Searching in library {library_id} for user {username}"
-        log_error(e, context=context)
         return handle_exception(e, context=context)
 
 
@@ -693,7 +690,6 @@ async def opds_library(
         raise
     except Exception as e:
         context = f"Generating items feed for user {username}, library {library_id}"
-        log_error(e, context=context)
         return handle_exception(e, context=context)
 
 
@@ -732,7 +728,6 @@ async def opds_series(
         raise
     except Exception as e:
         context = f"Generating series feed for user {username}, library {library_id}"
-        log_error(e, context=context)
         return handle_exception(e, context=context)
 
 
@@ -787,7 +782,6 @@ async def opds_series_items(
             f"Generating series items feed for user {username}, "
             f"library {library_id}, series {series_id}"
         )
-        log_error(e, context=context)
         return handle_exception(e, context=context)
 
 
@@ -826,7 +820,6 @@ async def opds_collections(
         raise
     except Exception as e:
         context = f"Generating collections feed for user {username}, library {library_id}"
-        log_error(e, context=context)
         return handle_exception(e, context=context)
 
 
@@ -872,7 +865,6 @@ async def opds_collection_items(
             f"Generating collection items feed for user {username}, "
             f"library {library_id}, collection {collection_id}"
         )
-        log_error(e, context=context)
         return handle_exception(e, context=context)
 
 
@@ -911,7 +903,6 @@ async def opds_authors(
         raise
     except Exception as e:
         context = f"Generating authors feed for user {username}, library {library_id}"
-        log_error(e, context=context)
         return handle_exception(e, context=context)
 
 
@@ -957,7 +948,6 @@ async def opds_author_items(
             f"Generating author items feed for user {username}, "
             f"library {library_id}, author {author_id}"
         )
-        log_error(e, context=context)
         return handle_exception(e, context=context)
 
 

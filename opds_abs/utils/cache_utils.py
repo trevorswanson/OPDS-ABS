@@ -11,6 +11,7 @@ import logging
 
 import pickle
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Callable
 import functools
@@ -30,8 +31,22 @@ from opds_abs.config import (
     CACHE_SAVE_INTERVAL,
     AUTHORS_CACHE_EXPIRY
 )
+from opds_abs.utils.item_utils import filter_ebook_items
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FetchOptions:
+    """Token/bypass_cache knobs shared by the get_cached_* helpers that need both.
+
+    Bundling these keeps functions that already take several required,
+    distinct identifiers (library_id, series_id, query, ...) from also
+    carrying two more independent optional flags as separate parameters.
+    """
+    token: Optional[str] = None
+    bypass_cache: bool = False
+
 
 # Cache dictionary: key -> (timestamp, data)
 _cache: Dict[str, Tuple[float, Any]] = {}
@@ -307,7 +322,7 @@ def cached(expiry: int = DEFAULT_CACHE_EXPIRY) -> Callable:
 
 
 async def get_cached_library_items(
-        fetch_from_api_func, filter_items_func, username, library_id,
+        fetch_from_api_func, username, library_id,
         token=None, bypass_cache=False):
     """Fetch and cache all library items that can be reused for filtering.
 
@@ -316,7 +331,6 @@ async def get_cached_library_items(
 
     Args:
         fetch_from_api_func (callable): The function to fetch data from the API.
-        filter_items_func (callable): The function to filter items.
         username (str): The username of the authenticated user.
         library_id (str): ID of the library to fetch items from.
         token (str, optional): Authentication token for Audiobookshelf.
@@ -343,7 +357,7 @@ async def get_cached_library_items(
         username=username,
         token=token,
     )
-    library_items = filter_items_func(data)
+    library_items = filter_ebook_items(data)
 
     # Store in cache for future use
     cache_set(cache_key, library_items)
@@ -351,9 +365,7 @@ async def get_cached_library_items(
     return library_items
 
 
-async def get_cached_search_results(
-        fetch_from_api_func, username, library_id, query,
-        token=None, bypass_cache=False):
+async def get_cached_search_results(fetch_from_api_func, username, library_id, query, options=None):
     """Fetch and cache search results to avoid repeated API calls.
 
     Args:
@@ -361,16 +373,17 @@ async def get_cached_search_results(
         username (str): The username of the authenticated user.
         library_id (str): ID of the library to search in.
         query (str): Search query string.
-        token (str, optional): Authentication token for Audiobookshelf.
-        bypass_cache (bool): Whether to bypass the cache and force a fresh search.
+        options (FetchOptions, optional): Token/bypass_cache knobs; defaults applied
+            if omitted.
 
     Returns:
         dict: Search results from API or cache.
     """
+    options = options or FetchOptions()
     cache_key = _create_cache_key(f"/libraries/{library_id}/search", {"q": query}, username)
 
     # Try to get from cache if not bypassing
-    if not bypass_cache:
+    if not options.bypass_cache:
         cached_data = cache_get(cache_key, SEARCH_RESULTS_CACHE_EXPIRY)
         if cached_data is not None:
             logger.debug("✓ Cache hit for search query: %s", query)
@@ -383,7 +396,7 @@ async def get_cached_search_results(
         f"/libraries/{library_id}/search",
         search_params,
         username=username,
-        token=token,
+        token=options.token,
     )
 
     # Store in cache for future use
@@ -521,13 +534,12 @@ async def _enhance_authors_with_details(
 
 
 async def get_cached_author_details(
-        fetch_func, filter_func, username, library_id,
+        fetch_func, username, library_id,
         token=None, bypass_cache=False):
     """Fetch and cache author information, focusing on authors who have books with ebook files.
 
     Args:
         fetch_func (callable): The function to fetch data from the API.
-        filter_func (callable): Function to filter items.
         username (str): The username of the authenticated user.
         library_id (str): ID of the library to search in.
         token (str, optional): Authentication token for Audiobookshelf.
@@ -549,7 +561,6 @@ async def get_cached_author_details(
     # Use cached library items instead of fetching directly
     library_items = await get_cached_library_items(
         fetch_func,
-        filter_func,
         username,
         library_id,
         token=token
@@ -581,29 +592,29 @@ async def get_cached_author_details(
 
 
 async def get_cached_series_items(
-        fetch_from_api_func, filter_items_func, username, library_id, series_id,
-        token=None, bypass_cache=False):
+        fetch_from_api_func, username, library_id, series_id, options=None):
     """Fetch and cache items by directly querying the filtered items endpoint.
 
     This ensures we get the proper sequence information for items in a series.
 
     Args:
         fetch_from_api_func (callable): The function to fetch data from the API.
-        filter_items_func (callable): The function to filter items.
         username (str): The username of the authenticated user.
         library_id (str): ID of the library containing the items.
         series_id (str): ID of the series to filter by.
-        token (str, optional): Authentication token for Audiobookshelf.
-        bypass_cache (bool): Whether to bypass the cache and force a fresh fetch.
+        options (FetchOptions, optional): Token/bypass_cache knobs; defaults applied
+            if omitted.
 
     Returns:
         list: Library items filtered by the specified series ID with sequence information.
     """
+    options = options or FetchOptions()
+
     # Create a cache key for this specific series items
     cache_key = _create_cache_key(f"/series-items/{library_id}/{series_id}", None, username)
 
     # Try to get from cache if not bypassing
-    if not bypass_cache:
+    if not options.bypass_cache:
         cached_data = cache_get(cache_key, SERIES_ITEMS_CACHE_EXPIRY)
         if cached_data is not None:
             logger.debug("✓ Cache hit for series items %s", series_id)
@@ -621,11 +632,11 @@ async def get_cached_series_items(
         f"/libraries/{library_id}/items",
         params,
         username=username,
-        token=token
+        token=options.token
     )
 
     # Filter items that contain ebooks
-    filtered_items = filter_items_func(data)
+    filtered_items = filter_ebook_items(data)
 
     # Store in cache for future use
     cache_set(cache_key, filtered_items)
