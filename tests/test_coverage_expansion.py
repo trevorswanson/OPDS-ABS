@@ -887,6 +887,14 @@ class ResolveAuthTokenTests(unittest.TestCase):
             result = api_client._resolve_auth_token("alice", "given-token", {})
         self.assertIsNone(result)
 
+    def test_no_token_skips_cache_lookup_when_auth_disabled(self):
+        # With AUTH_ENABLED False, the token-cache branch must not even be
+        # consulted; a stale cache entry should not leak through as a token.
+        auth_utils.TOKEN_CACHE["alice"] = ("stale-token", "Alice")
+        with patch.object(api_client, "AUTH_ENABLED", False):
+            result = api_client._resolve_auth_token("alice", None, {})
+        self.assertIsNone(result)
+
 
 class BuildAuthHeadersAndExpiryTests(unittest.TestCase):
     """Verify header construction and cache-expiry endpoint mapping."""
@@ -1040,6 +1048,20 @@ class FetchViaHttpTests(unittest.IsolatedAsyncioTestCase):
              patch.object(api_client, "AUTH_ENABLED", False):
             with self.assertRaises(APIClientError):
                 await api_client.fetch_from_api("/items/1", bypass_cache=True)
+
+    async def test_fresh_cache_entry_is_returned_without_a_network_call(self):
+        endpoint = "/items/1"
+        params = {}
+        username = "alice"
+        cache_key = cache_utils._create_cache_key(endpoint, params, username)
+        cache_utils.cache_set(cache_key, {"cached": True})
+
+        # No ClientSession is patched in, so a network call here would error
+        # instead of silently succeeding - proving the cache hit short-circuits it.
+        with patch.object(api_client, "AUTH_ENABLED", False):
+            result = await api_client.fetch_from_api(
+                endpoint, params, username=username, bypass_cache=False)
+        self.assertEqual(result, {"cached": True})
 
 
 class GetDownloadUrlsAndInvalidateCacheTests(unittest.IsolatedAsyncioTestCase):

@@ -80,9 +80,17 @@ jobs:
 
       - name: Run regression tests with coverage
         run: |
-          coverage run --source=opds_abs -m unittest discover -s tests -v
-          coverage report -m
+          coverage run --branch --source=opds_abs -m unittest discover -s tests -v
+          # `coverage report`'s own exit code enforces setup.cfg's fail_under
+          # against a *blended* stmt+branch number now that branch data
+          # exists; the next step checks statement and branch independently
+          # instead, so this is display-only here.
+          coverage report -m || true
           coverage xml
+          coverage json -o coverage.json
+
+      - name: Check coverage floor
+        run: python .github/scripts/check_coverage_floor.py
 
       - name: Upload coverage report
         if: ${{ always() }}
@@ -92,16 +100,9 @@ jobs:
           path: coverage.xml
           retention-days: 14
 
-      - name: Run branch coverage on PR head
+      - name: Export head coverage data
         if: ${{ github.event_name == 'pull_request' }}
-        env:
-          # A dedicated data file so this run - and the branch coverage it
-          # adds - never overwrites the statement-only .coverage data that
-          # coverage.xml and the fail_under gate above already used.
-          COVERAGE_FILE: .coverage.metrics
-        run: |
-          coverage run --branch --source=opds_abs -m unittest discover -s tests -q
-          coverage json -o coverage_head.json
+        run: cp coverage.json coverage_head.json
 
       - name: Run tests with coverage on PR base
         if: ${{ github.event_name == 'pull_request' }}

@@ -89,6 +89,31 @@ class FilterItemsByAuthorIdTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([b["id"] for b in result], ["b1"])
 
 
+class GetPagedAuthorsTests(unittest.IsolatedAsyncioTestCase):
+    """Verify page-number clamping in _get_paged_authors."""
+
+    async def test_page_below_one_is_clamped_to_one(self):
+        generator = AuthorFeedGenerator()
+        authors = [{"name": "A"}, {"name": "B"}, {"name": "C"}]
+        with patch.object(
+                generator, "get_authors_with_ebooks", new=AsyncMock(return_value=authors)):
+            paged, page, total_pages = await generator._get_paged_authors(
+                "alice", "lib-1", 0, 2, None)
+        self.assertEqual(page, 1)
+        self.assertEqual(total_pages, 2)
+        self.assertEqual([a["name"] for a in paged], ["A", "B"])
+
+    async def test_page_above_total_is_clamped_to_last_page(self):
+        generator = AuthorFeedGenerator()
+        authors = [{"name": "A"}, {"name": "B"}, {"name": "C"}]
+        with patch.object(
+                generator, "get_authors_with_ebooks", new=AsyncMock(return_value=authors)):
+            paged, page, total_pages = await generator._get_paged_authors(
+                "alice", "lib-1", 99, 2, None)
+        self.assertEqual(page, 2)
+        self.assertEqual([a["name"] for a in paged], ["C"])
+
+
 class GenerateAuthorItemsFeedTests(unittest.IsolatedAsyncioTestCase):
     """Verify per-author item feed generation, pagination, and errors."""
 
@@ -290,6 +315,20 @@ class CollectionDetailsAndFilterTests(unittest.IsolatedAsyncioTestCase):
                 "opds_abs.feeds.collection_feed.get_cached_library_items",
                 new=AsyncMock(return_value=items)):
             result = await generator.filter_items_by_collection_id("alice", "lib-1", "c1")
+        self.assertEqual([b["id"] for b in result], ["b1"])
+
+    async def test_filter_by_collection_uses_pre_supplied_details(self):
+        generator = CollectionFeedGenerator()
+        details = {"name": "Favorites", "books": [{"id": "b1"}]}
+        items = [book("b1"), book("b2")]
+        with patch.object(
+                generator, "get_collection_details",
+                new=AsyncMock(side_effect=AssertionError("should not be called"))), \
+             patch(
+                "opds_abs.feeds.collection_feed.get_cached_library_items",
+                new=AsyncMock(return_value=items)):
+            result = await generator.filter_items_by_collection_id(
+                "alice", "lib-1", "c1", collection_details=details)
         self.assertEqual([b["id"] for b in result], ["b1"])
 
     async def test_filter_falls_back_when_no_details(self):
