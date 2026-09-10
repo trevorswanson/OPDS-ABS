@@ -55,7 +55,7 @@ Production/container defaults must keep `OPDS_RELOAD=false`. Set
 
 ## Repository conventions
 
-- Python 3.11 runtime in the Docker image.
+- Python 3.14 runtime in the Docker image.
 - Dependencies are in `requirements.txt`; development tools are in
   `requirements-dev.txt`.
 - Runtime data belongs under `opds_abs/data/`; the persisted cache is generated
