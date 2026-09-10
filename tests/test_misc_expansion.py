@@ -327,8 +327,8 @@ class GenerateLibraryItemsFeedTests(unittest.IsolatedAsyncioTestCase):
             {"id": "old", "addedAt": 1, "media": {"metadata": {"title": "Old"}}},
             {"id": "new", "addedAt": 100, "media": {"metadata": {"title": "New"}}},
         ]
-        with patch(
-                "opds_abs.feeds.library_feed.get_cached_library_items",
+        with patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=cached_items)), \
              patch(
                 "opds_abs.feeds.library_feed.get_download_urls_from_item",
@@ -362,8 +362,8 @@ class GenerateLibraryItemsFeedTests(unittest.IsolatedAsyncioTestCase):
             {"id": "z", "addedAt": 1, "media": {"metadata": {"title": "Zorro"}}},
             {"id": "a", "addedAt": 2, "media": {"metadata": {"title": "Alpha"}}},
         ]
-        with patch(
-                "opds_abs.feeds.library_feed.get_cached_library_items",
+        with patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=cached_items)), \
              patch(
                 "opds_abs.feeds.library_feed.get_download_urls_from_item",

@@ -12,7 +12,7 @@ from opds_abs.api.client import fetch_from_api, get_download_urls_from_item
 from opds_abs.feeds.author_feed import AuthorFeedGenerator
 from opds_abs.feeds.series_feed import SeriesFeedGenerator
 from opds_abs.utils import dict_to_xml
-from opds_abs.utils.cache_utils import get_cached_library_items, get_cached_search_results
+from opds_abs.utils.cache_utils import FetchOptions, get_cached_search_results
 from opds_abs.utils.auth_utils import get_token_for_username
 
 # Set up logging
@@ -104,9 +104,9 @@ class SearchFeedGenerator(BaseFeedGenerator):
                         token=token
                     )
                 except Exception as e:
-                    # Handle exceptions appropriately
+                    # Handle exceptions appropriately; handle_exception() already
+                    # logs, so no separate log_error() call is needed here.
                     context = f"Searching in library {library_id} for user {username}"
-                    log_error(e, context=context)
                     return handle_exception(e, context=context)
             ```
         """
@@ -130,22 +130,28 @@ class SearchFeedGenerator(BaseFeedGenerator):
 
         # Get search data and library items from cache or API concurrently
         search_data, cached_library_items = await asyncio.gather(
-            get_cached_search_results(fetch_from_api, username, library_id, query, token=token),
-            get_cached_library_items(
-                fetch_from_api, self.filter_items, username, library_id, token=token)
+            get_cached_search_results(
+                fetch_from_api, username, library_id, query, FetchOptions(token=token)),
+            self.get_all_cached_library_items(username, library_id, token=token)
         )
 
         # Create the base feed and add metadata
         feed = self.create_base_feed(username, library_id, token=token)
         self._add_feed_metadata(feed, library_id, query)
 
-        # Process books, series, and authors separately
-        await self._process_books(
-            feed, search_data, username, cached_library_items, token)
-        await self._process_series(
-            feed, search_data, username, library_id, cached_library_items, token)
-        await self._process_authors(
-            feed, search_data, username, library_id, cached_library_items, token)
+        # Process books, series, and authors separately, sharing one context
+        # dict rather than threading the same handful of values through each.
+        context = {
+            "feed": feed,
+            "search_data": search_data,
+            "username": username,
+            "library_id": library_id,
+            "cached_library_items": cached_library_items,
+            "token": token,
+        }
+        await self._process_books(context)
+        await self._process_series(context)
+        await self._process_authors(context)
 
         return self.create_response(feed)
 
@@ -184,21 +190,23 @@ class SearchFeedGenerator(BaseFeedGenerator):
         }
         dict_to_xml(feed, feed_data)
 
-    async def _process_books(
-            self, feed, search_data, username, cached_library_items, token=None):
+    async def _process_books(self, context):
         """Process book search results and add them to the feed.
 
         Args:
-            feed: The feed object to add books to.
-            search_data: The search results data.
-            username: The username of the authenticated user.
-            cached_library_items: List of cached library items for metadata lookup.
-            token: Authentication token for Audiobookshelf.
+            context (dict): Shared search context - feed, search_data,
+                username, cached_library_items, token (see generate_search_feed()).
         """
-        book_results = search_data.get("book", [])
+        feed = context["feed"]
+        username = context["username"]
+        token = context["token"]
+        book_results = context["search_data"].get("book", [])
 
         # Create a mapping of book IDs to their full library item data
-        book_id_map = {item.get('id'): item for item in cached_library_items if item.get('id')}
+        book_id_map = {
+            item.get('id'): item
+            for item in context["cached_library_items"] if item.get('id')
+        }
 
         for book_result in book_results:
             await self._process_single_book(feed, book_result, username, book_id_map, token)
@@ -249,21 +257,19 @@ class SearchFeedGenerator(BaseFeedGenerator):
         media = lib_item.get("media", {})
         return bool(media.get("ebookFile", media.get("ebookFormat", None)))
 
-    async def _process_series(
-            self, feed, search_data, username, library_id,
-            cached_library_items, token=None):
+    async def _process_series(self, context):
         """Process series search results and add them to the feed.
 
         Args:
-            feed: The XML feed object to add series entries to.
-            search_data: Dictionary containing search results from Audiobookshelf API.
-            username: The username of the authenticated user.
-            library_id: ID of the library being searched.
-            cached_library_items: List of cached library items for metadata lookup.
-            token: Optional authentication token for Audiobookshelf.
+            context (dict): Shared search context - feed, search_data,
+                username, library_id, cached_library_items, token (see
+                generate_search_feed()).
         """
+        cached_library_items = context["cached_library_items"]
+
         # Extract series with ebooks
-        series_with_ebooks, series_ids_with_ebooks = self._extract_series_with_ebooks(search_data)
+        series_with_ebooks, series_ids_with_ebooks = self._extract_series_with_ebooks(
+            context["search_data"])
 
         if not series_with_ebooks:
             return
@@ -272,19 +278,20 @@ class SearchFeedGenerator(BaseFeedGenerator):
         series_author_map = self._build_series_author_map(
             cached_library_items, series_ids_with_ebooks)
 
-        # Add each series to the feed with author information
-        series_generator = SeriesFeedGenerator()
+        # Add each series to the feed with author information. The per-series
+        # loop only varies `series`; everything else is constant across
+        # iterations, so it's bundled into one context passed alongside it.
+        series_context = {
+            "series_generator": SeriesFeedGenerator(),
+            "series_author_map": series_author_map,
+            "cached_library_items": cached_library_items,
+            "feed": context["feed"],
+            "username": context["username"],
+            "library_id": context["library_id"],
+            "token": context["token"],
+        }
         for series in series_with_ebooks:
-            await self._add_series_to_feed(
-                series,
-                series_generator,
-                series_author_map,
-                cached_library_items,
-                feed,
-                username,
-                library_id,
-                token=token
-            )
+            await self._add_series_to_feed(series, series_context)
 
     def _extract_series_with_ebooks(self, search_results):
         """Extract series information from search results, grouping ebooks by series.
@@ -365,20 +372,15 @@ class SearchFeedGenerator(BaseFeedGenerator):
 
         return series_author_map
 
-    async def _add_series_to_feed(
-            self, series, series_generator, series_author_map, cached_library_items,
-            feed, username, library_id, token=None):
+    async def _add_series_to_feed(self, series, series_context):
         """Add a single series to the feed with author information.
 
         Args:
             series: Dictionary containing series data.
-            series_generator: SeriesFeedGenerator instance to handle adding series entries.
-            series_author_map: Mapping of series IDs to author information.
-            cached_library_items: List of cached library items for metadata lookup.
-            feed: The XML feed object to add the series entry to.
-            username: String representing the authenticated user's username.
-            library_id: String identifier for the library.
-            token: Optional authentication token for Audiobookshelf.
+            series_context (dict): series_generator, series_author_map,
+                cached_library_items, feed, username, library_id, token -
+                shared across every series in one _process_series() call
+                (see there for details).
 
         Returns:
             None. The series is added directly to the feed.
@@ -389,15 +391,17 @@ class SearchFeedGenerator(BaseFeedGenerator):
         series_author = self._find_series_author(
             series_id,
             series.get('books', []),
-            cached_library_items,
-            series_author_map
+            series_context["cached_library_items"],
+            series_context["series_author_map"]
         )
 
         # Set the author name in the series object
         series["authorName"] = series_author
 
         # Add the series to the feed
-        await series_generator.add_series_to_feed(username, library_id, feed, series, token=token)
+        await series_context["series_generator"].add_series_to_feed(
+            series_context["username"], series_context["library_id"],
+            series_context["feed"], series, token=series_context["token"])
 
     def _find_series_author(self, series_id, series_books, cached_library_items, series_author_map):
         """Find the author for a series using various data sources.
@@ -450,46 +454,41 @@ class SearchFeedGenerator(BaseFeedGenerator):
         # Return default if all attempts failed
         return "Unknown Author"
 
-    async def _process_authors(
-            self, feed, search_data, username, library_id,
-            cached_library_items, token=None):
+    async def _process_authors(self, context):
         """Process author search results and add them to the feed.
 
         Args:
-            feed: The XML feed object to add author entries to.
-            search_data (dict): Dictionary containing search results from Audiobookshelf API.
-            username (str): The username of the authenticated user.
-            library_id (str): ID of the library being searched.
-            cached_library_items (list): List of cached library items for metadata lookup.
-            token (str, optional): Authentication token for Audiobookshelf.
+            context (dict): Shared search context - feed, search_data,
+                username, library_id, cached_library_items, token (see
+                generate_search_feed()).
 
         Returns:
             None. Author entries are added directly to the feed if they have ebooks.
         """
         # Extract author data from search results
         search_author_names, author_data_by_name = self._extract_author_data_from_search(
-            search_data)
+            context["search_data"])
 
         if not search_author_names:
             return
 
         # Count ebooks per author using cached items
         author_ebook_counts = self._count_ebooks_per_author(
-            cached_library_items, search_author_names)
+            context["cached_library_items"], search_author_names)
 
-        # Add each author that has books to the feed
-        author_generator = AuthorFeedGenerator()
+        # Add each author that has books to the feed. The per-author loop
+        # only varies author_name/ebook_count; everything else is constant
+        # across iterations, so it's bundled into one context passed alongside.
+        author_context = {
+            "author_generator": AuthorFeedGenerator(),
+            "author_data_by_name": author_data_by_name,
+            "feed": context["feed"],
+            "username": context["username"],
+            "library_id": context["library_id"],
+            "token": context["token"],
+        }
         for author_name, ebook_count in author_ebook_counts.items():
-            self._add_author_to_feed(
-                author_generator,
-                author_name,
-                ebook_count,
-                author_data_by_name,
-                feed,
-                username,
-                library_id,
-                token=token
-            )
+            self._add_author_to_feed(author_name, ebook_count, author_context)
 
     def _extract_author_data_from_search(self, search_data):
         """Extract author data from search results.
@@ -533,24 +532,20 @@ class SearchFeedGenerator(BaseFeedGenerator):
 
         return author_ebook_counts
 
-    def _add_author_to_feed(self, author_generator, author_name, ebook_count, author_data_by_name,
-                            feed, username, library_id, token=None):
+    def _add_author_to_feed(self, author_name, ebook_count, author_context):
         """Add a single author to the feed with ebook count information.
 
         Args:
-            author_generator (AuthorFeedGenerator): Generator for author entries.
             author_name (str): Name of the author to add to the feed.
             ebook_count (int): Number of ebooks by this author available in the library.
-            author_data_by_name (dict): Mapping of author names to data objects.
-            feed: The XML feed object to add the author entry to.
-            username (str): The username of the authenticated user.
-            library_id (str): ID of the library being searched.
-            token (str, optional): Authentication token for Audiobookshelf.
+            author_context (dict): author_generator, author_data_by_name, feed,
+                username, library_id, token - shared across every author in
+                one _process_authors() call (see there for details).
 
         Returns:
             None. The author is added directly to the feed if they have at least one ebook.
         """
-        author_data = author_data_by_name.get(author_name)
+        author_data = author_context["author_data_by_name"].get(author_name)
         if author_data:
             # Add the ebook count to the author data
             author_data["ebook_count"] = ebook_count
@@ -558,10 +553,10 @@ class SearchFeedGenerator(BaseFeedGenerator):
 
         # Only add the author if they have at least one ebook
         if ebook_count > 0:
-            author_generator.add_author_to_feed(
-                username,
-                library_id,
-                feed,
+            author_context["author_generator"].add_author_to_feed(
+                author_context["username"],
+                author_context["library_id"],
+                author_context["feed"],
                 author_data,
-                token=token
+                token=author_context["token"]
             )

@@ -781,24 +781,26 @@ class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
         cache_key = cache_utils._create_cache_key("/library-items-all/lib-1", None, "alice")
         cache_utils.cache_set(cache_key, ["cached-item"])
         result = await cache_utils.get_cached_library_items(
-            fetch, lambda data: data, "alice", "lib-1")
+            fetch, "alice", "lib-1")
         self.assertEqual(result, ["cached-item"])
         fetch.assert_not_awaited()
 
     async def test_get_cached_library_items_cache_miss_fetches_and_caches(self):
-        fetch = AsyncMock(return_value={"results": [{"id": "1"}]})
+        fetch = AsyncMock(return_value={"results": [
+            {"id": "1", "media": {"ebookFormat": "epub"}}]})
         result = await cache_utils.get_cached_library_items(
-            fetch, lambda data: data["results"], "alice", "lib-1")
-        self.assertEqual(result, [{"id": "1"}])
+            fetch, "alice", "lib-1")
+        self.assertEqual([item["id"] for item in result], ["1"])
         fetch.assert_awaited_once()
 
     async def test_get_cached_library_items_bypass_cache_forces_fetch(self):
         cache_key = cache_utils._create_cache_key("/library-items-all/lib-1", None, "alice")
         cache_utils.cache_set(cache_key, ["stale"])
-        fetch = AsyncMock(return_value={"results": ["fresh"]})
+        fetch = AsyncMock(return_value={"results": [
+            {"id": "fresh", "media": {"ebookFormat": "epub"}}]})
         result = await cache_utils.get_cached_library_items(
-            fetch, lambda data: data["results"], "alice", "lib-1", bypass_cache=True)
-        self.assertEqual(result, ["fresh"])
+            fetch, "alice", "lib-1", bypass_cache=True)
+        self.assertEqual([item["id"] for item in result], ["fresh"])
         fetch.assert_awaited_once()
 
     async def test_get_cached_search_results_cache_hit_and_miss(self):
@@ -816,7 +818,8 @@ class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
 
         fetch.reset_mock()
         result3 = await cache_utils.get_cached_search_results(
-            fetch, "alice", "lib-1", "dune", bypass_cache=True)
+            fetch, "alice", "lib-1", "dune",
+            cache_utils.FetchOptions(bypass_cache=True))
         self.assertEqual(result3, {"book": []})
         fetch.assert_awaited_once()
 
@@ -890,7 +893,7 @@ class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_cached_author_details_empty_library_returns_empty_list(self):
         fetch = AsyncMock(return_value={"results": []})
         result = await cache_utils.get_cached_author_details(
-            fetch, lambda data: data["results"], "alice", "lib-1")
+            fetch, "alice", "lib-1")
         self.assertEqual(result, [])
 
     async def test_get_cached_author_details_full_flow_caches_result(self):
@@ -903,7 +906,7 @@ class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
             raise AssertionError(f"unexpected endpoint {endpoint}")
 
         result = await cache_utils.get_cached_author_details(
-            fetch, lambda data: data["results"], "alice", "lib-1")
+            fetch, "alice", "lib-1")
         self.assertEqual(result[0]["id"], "author-1")
 
         cache_key = cache_utils._create_cache_key(
@@ -918,26 +921,28 @@ class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
             return {}
 
         result = await cache_utils.get_cached_author_details(
-            fetch, lambda data: data["results"], "alice", "lib-1")
+            fetch, "alice", "lib-1")
         self.assertEqual(result[0]["name"], "A")
         self.assertIsNone(result[0]["id"])
 
     async def test_get_cached_series_items_cache_hit_and_miss(self):
-        fetch = AsyncMock(return_value={"results": [{"id": "b1"}]})
+        fetch = AsyncMock(return_value={"results": [
+            {"id": "b1", "media": {"ebookFormat": "epub"}}]})
         result = await cache_utils.get_cached_series_items(
-            fetch, lambda data: data["results"], "alice", "lib-1", "s1")
-        self.assertEqual(result, [{"id": "b1"}])
+            fetch, "alice", "lib-1", "s1")
+        self.assertEqual([item["id"] for item in result], ["b1"])
 
         fetch.reset_mock()
         cached = await cache_utils.get_cached_series_items(
-            fetch, lambda data: data["results"], "alice", "lib-1", "s1")
-        self.assertEqual(cached, [{"id": "b1"}])
+            fetch, "alice", "lib-1", "s1")
+        self.assertEqual([item["id"] for item in cached], ["b1"])
         fetch.assert_not_awaited()
 
         fetch.reset_mock()
         bypassed = await cache_utils.get_cached_series_items(
-            fetch, lambda data: data["results"], "alice", "lib-1", "s1", bypass_cache=True)
-        self.assertEqual(bypassed, [{"id": "b1"}])
+            fetch, "alice", "lib-1", "s1",
+            cache_utils.FetchOptions(bypass_cache=True))
+        self.assertEqual([item["id"] for item in bypassed], ["b1"])
         fetch.assert_awaited_once()
 
     async def test_get_cached_author_details_bypass_cache_and_cache_hit(self):
@@ -950,15 +955,15 @@ class CachedHelperFunctionsTests(unittest.IsolatedAsyncioTestCase):
             return await fetch(endpoint, params, username=username, token=token)
 
         result = await cache_utils.get_cached_author_details(
-            fetch_dispatch, lambda data: data["results"], "alice", "lib-1")
+            fetch_dispatch, "alice", "lib-1")
         self.assertEqual(result[0]["id"], "author-1")
 
         cached = await cache_utils.get_cached_author_details(
-            fetch_dispatch, lambda data: data["results"], "alice", "lib-1")
+            fetch_dispatch, "alice", "lib-1")
         self.assertEqual(cached, result)
 
         bypassed = await cache_utils.get_cached_author_details(
-            fetch_dispatch, lambda data: data["results"], "alice", "lib-1", bypass_cache=True)
+            fetch_dispatch, "alice", "lib-1", bypass_cache=True)
         self.assertEqual(bypassed[0]["id"], "author-1")
 
 

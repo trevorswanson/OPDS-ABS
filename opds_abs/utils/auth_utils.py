@@ -427,7 +427,10 @@ def _parse_basic_auth_header(
             return username, credential, None
 
         logger.warning("Basic auth doesn't contain username:password format")
-    except Exception as e:
+    except ValueError as e:
+        # base64.b64decode() raises binascii.Error (a ValueError subclass) on
+        # malformed input; .decode("utf-8") raises UnicodeDecodeError (also a
+        # ValueError subclass) on invalid bytes.
         logger.warning("Error decoding Basic auth: %s", e)
 
     return None, None, None

@@ -283,7 +283,11 @@ class FeedGeneratorTests(unittest.TestCase):
     def test_pagination_metadata_and_links_are_generated(self):
         feed = self.generator.create_base_feed()
         self.generator.add_pagination_metadata(feed, page=2, items_per_page=10, total_items=25)
-        self.generator.add_pagination_links(feed, "alice/libraries/lib/items", 2, 10, 25)
+        context = {
+            "current_path": "alice/libraries/lib/items", "page": 2,
+            "items_per_page": 10, "token": None,
+        }
+        self.generator.add_pagination_links(feed, context, 25)
         xml = etree.tostring(feed).decode()
         self.assertIn(">11</opensearch:startIndex>", xml)
         self.assertIn('rel="previous"', xml)
@@ -767,7 +771,7 @@ class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
                 "opds_abs.feeds.series_feed.get_cached_series_details",
                 new=AsyncMock(return_value={
                     "id": "series-1", "name": "Empty Series", "books": []})), \
-             patch("opds_abs.feeds.series_feed.fetch_from_api", new=fetch_mock):
+             patch("opds_abs.core.feed_generator.fetch_from_api", new=fetch_mock):
             filtered_items, series_details = await generator.filter_items_by_series_id(
                 "alice", "lib-42", "series-1", token="tok")
 
@@ -914,13 +918,14 @@ class SpecializedFeedTests(unittest.IsolatedAsyncioTestCase):
     async def test_search_feed_with_query_returns_valid_feed(self):
         from opds_abs.feeds.search_feed import SearchFeedGenerator
 
+        generator = SearchFeedGenerator()
         with patch(
                 "opds_abs.feeds.search_feed.get_cached_search_results",
                 new=AsyncMock(return_value={})), \
-             patch(
-                "opds_abs.feeds.search_feed.get_cached_library_items",
+             patch.object(
+                generator, "get_all_cached_library_items",
                 new=AsyncMock(return_value=[])):
-            response = await SearchFeedGenerator().generate_search_feed(
+            response = await generator.generate_search_feed(
                 "alice", "lib-1", {"q": "dune"}, token="token")
         self.assertEqual(response.status_code, 200)
         self.assertIn("Search results for: dune", response.body.decode())

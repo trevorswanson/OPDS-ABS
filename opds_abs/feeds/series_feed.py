@@ -9,7 +9,7 @@ from opds_abs.api.client import fetch_from_api, get_download_urls_from_item
 
 from opds_abs.utils import dict_to_xml
 from opds_abs.utils.cache_utils import (
-    get_cached_library_items,
+    FetchOptions,
     get_cached_series_details,
     get_cached_series_items,
 )
@@ -127,13 +127,7 @@ class SeriesFeedGenerator(BaseFeedGenerator):
         params = {"filter": f"series.{self.create_filter(series_id)}"}
         if extra_params:
             params.update(extra_params)
-        data = await fetch_from_api(
-                f"/libraries/{library_id}/items",
-                params,
-                username=username,
-                token=token
-        )
-        return self.filter_items(data)
+        return await self.fetch_items_with_filter(library_id, params, username, token=token)
 
     def _build_fallback_series_details(self, series_id, filtered_items):
         """Build minimal series details using the most common author of some items.
@@ -195,13 +189,8 @@ class SeriesFeedGenerator(BaseFeedGenerator):
                 logger.warning("No book IDs found in series %s", series_name)
                 # Fall back to API call if we couldn't find any book IDs
                 params = {"filter": f"series.{self.create_filter(series_id)}"}
-                data = await fetch_from_api(
-                        f"/libraries/{library_id}/items",
-                        params,
-                        username=username,
-                        token=token
-                )
-                filtered_items = self.filter_items(data)
+                filtered_items = await self.fetch_items_with_filter(
+                    library_id, params, username, token=token)
                 # Get the most common author from the filtered items
                 most_common_author = self.get_most_common_author(filtered_items)
                 # Update series details with author information
@@ -211,13 +200,8 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             logger.debug("Found %d book IDs in series %s", len(series_book_ids), series_name)
 
             # Try to get all library items from cache
-            library_items = await get_cached_library_items(
-                fetch_from_api,
-                self.filter_items,
-                username,
-                library_id,
-                token=token
-            )
+            library_items = await self.get_all_cached_library_items(
+                username, library_id, token=token)
 
             # Filter the cached items by exact book ID match
             filtered_items = [
@@ -337,30 +321,18 @@ class SeriesFeedGenerator(BaseFeedGenerator):
             # This ensures we get the proper sequence information
             library_items = await get_cached_series_items(
                 fetch_from_api,
-                self.filter_items,
                 username,
                 library_id,
                 series_id,
-                token=token
+                FetchOptions(token=token)
             )
 
             series_name, author_name = self._get_series_display_info(
                 series_details, library_items)
 
-            # Create the feed
-            feed = self.create_base_feed(username, library_id, token=token)
-
-            # Build the feed metadata
-            feed_data = {
-                "id": {"_text": library_id},
-                "author": {
-                    "name": {"_text": "OPDS Audiobookshelf"}
-                },
-                "title": {"_text": f"{series_name} Series by {author_name}"}
-            }
-
-            # Convert feed metadata to XML
-            dict_to_xml(feed, feed_data)
+            # Create the feed with its standard metadata
+            feed = self.create_items_feed(
+                username, library_id, f"{series_name} Series by {author_name}", token=token)
 
             if not library_items:
                 error_data = {
@@ -390,7 +362,6 @@ class SeriesFeedGenerator(BaseFeedGenerator):
         except Exception as e:
             # Handle any unexpected errors
             context = f"Generating series items feed for series {series_id}"
-            log_error(e, context=context)
 
             # Use handle_exception to return a standardized error response
             return handle_exception(e, context=context)
@@ -439,13 +410,8 @@ class SeriesFeedGenerator(BaseFeedGenerator):
         if first_book_id:
             try:
                 # Use cached library items if possible
-                library_items = await get_cached_library_items(
-                    fetch_from_api,
-                    self.filter_items,
-                    username,
-                    library_id,
-                    token=token
-                )
+                library_items = await self.get_all_cached_library_items(
+                    username, library_id, token=token)
 
                 # Find the book in library items
                 for item in library_items:
@@ -530,22 +496,7 @@ class SeriesFeedGenerator(BaseFeedGenerator):
                     "name": {"_text": raw_author_name}
                 },
                 "content": {"_text": content_text},
-                "link": [
-                    {
-                        "_attrs": {
-                            "href": series_link,
-                            "rel": "subsection",
-                            "type": "application/atom+xml;profile=opds-catalog"
-                        }
-                    },
-                    {
-                        "_attrs": {
-                            "href": cover_url,
-                            "rel": "http://opds-spec.org/image",
-                            "type": "image/jpeg"
-                        }
-                    }
-                ]
+                "link": self.build_listing_entry_links(series_link, cover_url)
             }
         }
 

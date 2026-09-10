@@ -7,7 +7,7 @@ import asyncio
 from opds_abs.core.feed_generator import BaseFeedGenerator
 from opds_abs.api.client import fetch_from_api
 from opds_abs.utils import dict_to_xml
-from opds_abs.utils.cache_utils import get_cached_library_items, has_ebook
+from opds_abs.utils.cache_utils import has_ebook
 from opds_abs.utils.error_utils import (
     FeedGenerationError,
     ResourceNotFoundError,
@@ -81,13 +81,7 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             if not collection_details:
                 logger.warning("Could not find collection details for ID %s", collection_id)
                 params = {"collection": collection_id}
-                data = await fetch_from_api(
-                        f"/libraries/{library_id}/items",
-                        params,
-                        username=username,
-                        token=token
-                )
-                return self.filter_items(data)
+                return await self.fetch_items_with_filter(library_id, params, username, token=token)
 
             collection_name = collection_details.get("name", "Unknown Collection")
             logger.debug("Filtering items by collection: %s", collection_name)
@@ -103,13 +97,8 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                 return []
 
             # Try to get all library items from cache using the shared utility function
-            library_items = await get_cached_library_items(
-                fetch_from_api,
-                self.filter_items,
-                username,
-                library_id,
-                token=token
-            )
+            library_items = await self.get_all_cached_library_items(
+                username, library_id, token=token)
 
             # Filter the cached items by matching book IDs - using list comprehension for efficiency
             filtered_items = [
@@ -127,13 +116,7 @@ class CollectionFeedGenerator(BaseFeedGenerator):
             logger.error("Error filtering items by collection: %s", e)
             # Fall back to API call if there was an error
             params = {"collection": collection_id}
-            data = await fetch_from_api(
-                    f"/libraries/{library_id}/items",
-                    params,
-                    username=username,
-                    token=token
-            )
-            return self.filter_items(data)
+            return await self.fetch_items_with_filter(library_id, params, username, token=token)
 
     async def generate_collection_items_feed(self, username, library_id, collection_id, token=None,
                                              page=1, per_page=None):
@@ -165,9 +148,10 @@ class CollectionFeedGenerator(BaseFeedGenerator):
 
             # Add pagination links only if pagination is enabled
             if not no_pagination:
-                base_url = (
-                    f"/opds/{username}/libraries/{library_id}/collections/{collection_id}")
-                self.add_page_pagination_links(feed, base_url, page, total_pages, token)
+                self.add_page_pagination_links(
+                    feed,
+                    f"/opds/{username}/libraries/{library_id}/collections/{collection_id}",
+                    page, total_pages, token)
 
             await self.add_paged_books_to_feed(feed, paged_items, username, token)
 
@@ -176,7 +160,6 @@ class CollectionFeedGenerator(BaseFeedGenerator):
         except Exception as e:
             # Handle any unexpected errors
             context = f"Generating collection items feed for collection {collection_id}"
-            log_error(e, context=context)
 
             # Use handle_exception to return a standardized error response
             return handle_exception(e, context=context)
@@ -339,22 +322,7 @@ class CollectionFeedGenerator(BaseFeedGenerator):
                         f"ebook{'s' if book_count != 1 else ''}"
                     )
                 },
-                "link": [
-                    {
-                        "_attrs": {
-                            "href": collection_link,
-                            "rel": "subsection",
-                            "type": "application/atom+xml;profile=opds-catalog"
-                        }
-                    },
-                    {
-                        "_attrs": {
-                            "href": cover_url,
-                            "rel": "http://opds-spec.org/image",
-                            "type": "image/jpeg"
-                        }
-                    }
-                ]
+                "link": self.build_listing_entry_links(collection_link, cover_url)
             }
         }
 
@@ -427,7 +395,6 @@ class CollectionFeedGenerator(BaseFeedGenerator):
         except Exception as e:
             # Handle any other unexpected errors
             context = f"Generating collections feed for user {username}, library {library_id}"
-            log_error(e, context=context)
 
             # Use handle_exception to return a standardized error response
             return handle_exception(e, context=context)
