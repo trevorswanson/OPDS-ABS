@@ -1200,6 +1200,32 @@ async def _stream_download_file(url, headers):
                 status_code=500, detail=f"Error downloading file: {str(e)}") from e
 
 
+def _sanitize_header_value(value):
+    """Make a header value safe to send over ASGI, which encodes headers as latin-1.
+
+    aiohttp decodes raw response headers as UTF-8 with the surrogateescape
+    error handler, so a header containing non-UTF-8 bytes (e.g. Audiobookshelf
+    or Node.js writing a filename with German umlauts straight through as
+    latin-1 bytes) comes back as a string containing surrogate code points.
+    Those surrogates can't be encoded as latin-1 either, so passing the value
+    through unchanged blows up when Starlette/uvicorn write the response
+    headers. Recovering the original bytes and decoding them as latin-1
+    (which accepts every byte value) round-trips back to the exact bytes
+    Audiobookshelf originally sent.
+
+    Args:
+        value: The header value as decoded by aiohttp.
+
+    Returns:
+        str: A string that is safe to latin-1-encode for the outgoing response.
+    """
+    try:
+        value.encode("latin-1")
+        return value
+    except UnicodeEncodeError:
+        return value.encode("utf-8", "surrogateescape").decode("latin-1")
+
+
 async def _fetch_download_head_info(url, headers, item_id):
     """HEAD the download URL to get its content type and forwardable headers.
 
@@ -1226,7 +1252,8 @@ async def _fetch_download_head_info(url, headers, item_id):
                 for header_name, header_value in head_response.headers.items():
                     if header_name.lower() in (
                             "content-type", "content-disposition", "content-length"):
-                        response_headers[header_name] = header_value
+                        response_headers[header_name] = _sanitize_header_value(
+                            header_value)
 
                 logger.debug("Proxying download with content type: %s", content_type)
 
