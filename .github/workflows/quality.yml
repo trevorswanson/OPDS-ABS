@@ -92,9 +92,16 @@ jobs:
           path: coverage.xml
           retention-days: 14
 
-      - name: Export head coverage data
+      - name: Run branch coverage on PR head
         if: ${{ github.event_name == 'pull_request' }}
-        run: coverage json -o coverage_head.json
+        env:
+          # A dedicated data file so this run - and the branch coverage it
+          # adds - never overwrites the statement-only .coverage data that
+          # coverage.xml and the fail_under gate above already used.
+          COVERAGE_FILE: .coverage.metrics
+        run: |
+          coverage run --branch --source=opds_abs -m unittest discover -s tests -q
+          coverage json -o coverage_head.json
 
       - name: Run tests with coverage on PR base
         if: ${{ github.event_name == 'pull_request' }}
@@ -103,7 +110,7 @@ jobs:
           git worktree add /tmp/pr-base "${{ github.event.pull_request.base.sha }}"
           cd /tmp/pr-base
           python -m pip install -r requirements-dev.txt
-          coverage run --source=opds_abs -m unittest discover -s tests -q || true
+          coverage run --branch --source=opds_abs -m unittest discover -s tests -q || true
           coverage json -o "${GITHUB_WORKSPACE}/coverage_base.json"
 
       - name: Build coverage comment body

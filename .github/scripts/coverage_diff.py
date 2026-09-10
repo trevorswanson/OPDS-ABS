@@ -1,11 +1,22 @@
 """Build a before/after coverage summary comment for a pull request.
 
-Reads two `coverage json` reports (PR base and PR head) plus the list of
-changed opds_abs/*.py files, and writes a markdown table of each changed
-file's coverage delta plus the overall delta to coverage_comment.md.
+Reads two `coverage json --branch` reports (PR base and PR head) plus the
+list of changed opds_abs/*.py files, and writes a markdown table of each
+changed file's statement/line and branch coverage delta, plus the overall
+delta, to coverage_comment.md.
+
+Statement and line coverage are the same metric in coverage.py - Python
+has no separate concept of "line coverage" distinct from "statement
+coverage" the way some other languages do - so they're reported as one
+row. Function coverage isn't a coverage.py metric at all.
 """
 import json
 import sys
+
+METRICS = [
+    ("Statement/Line", "percent_statements_covered"),
+    ("Branch", "percent_branches_covered"),
+]
 
 
 def load(path):
@@ -22,21 +33,30 @@ def fmt_pct(value):
     return f"{value:.1f}%" if value is not None else "—"
 
 
-def fmt_delta(before, after):
-    """Format the before -> after coverage delta for one file or total."""
-    if before is None or after is None:
-        return "new file" if before is None and after is not None else "n/a"
+def fmt_cell(before, after):
+    """Format a before -> after (delta) cell for one metric."""
+    if before is None and after is None:
+        return "—"
+    if before is None:
+        return f"{fmt_pct(after)} (new)"
+    if after is None:
+        return f"{fmt_pct(before)} (removed)"
     delta = after - before
     sign = "+" if delta >= 0 else ""
-    return f"{sign}{delta:.1f}%"
+    return f"{fmt_pct(before)} → {fmt_pct(after)} ({sign}{delta:.1f}%)"
 
 
-def file_pct(cov, filename):
-    """Look up a single file's coverage percentage in a JSON report."""
+def summary_pct(cov, filename, key):
+    """Look up one metric for one file in a coverage.py JSON report."""
     if cov is None:
         return None
     entry = cov.get("files", {}).get(filename)
-    return entry["summary"]["percent_covered"] if entry else None
+    return entry["summary"].get(key) if entry else None
+
+
+def totals_pct(cov, key):
+    """Look up one metric from a coverage.py JSON report's totals."""
+    return cov["totals"].get(key) if cov else None
 
 
 def main():
@@ -47,29 +67,26 @@ def main():
 
     lines = ["### Coverage report", "", "**Changed files**", ""]
     if changed:
-        lines.append("| File | Before | After | Delta |")
-        lines.append("|---|---|---|---|")
+        header = ["File"] + [label for label, _ in METRICS]
+        lines.append("| " + " | ".join(header) + " |")
+        lines.append("|" + "---|" * len(header))
         for filename in changed:
-            before = file_pct(base, filename)
-            after = file_pct(head, filename)
-            lines.append(
-                f"| `{filename}` | {fmt_pct(before)} | {fmt_pct(after)} | "
-                f"{fmt_delta(before, after)} |"
-            )
+            cells = [f"`{filename}`"]
+            for _, key in METRICS:
+                before = summary_pct(base, filename, key)
+                after = summary_pct(head, filename, key)
+                cells.append(fmt_cell(before, after))
+            lines.append("| " + " | ".join(cells) + " |")
     else:
         lines.append("No opds_abs/*.py files changed in this PR.")
 
     lines.append("")
     lines.append("**Overall**")
-    before_total = base["totals"]["percent_covered"] if base else None
-    after_total = head["totals"]["percent_covered"] if head else None
-    if before_total is None or after_total is None:
-        lines.append(f"{fmt_pct(before_total)} -> {fmt_pct(after_total)}")
-    else:
-        lines.append(
-            f"{fmt_pct(before_total)} -> {fmt_pct(after_total)} "
-            f"({fmt_delta(before_total, after_total)})"
-        )
+    lines.append("")
+    for label, key in METRICS:
+        before_total = totals_pct(base, key)
+        after_total = totals_pct(head, key)
+        lines.append(f"- {label}: {fmt_cell(before_total, after_total)}")
 
     with open("coverage_comment.md", "w") as f:
         f.write("\n".join(lines) + "\n")
