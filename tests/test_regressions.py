@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 class ReloadConfigurationTests(unittest.TestCase):
@@ -101,6 +101,68 @@ class CoverLinkTests(unittest.TestCase):
         xml = feed.getroottree().getroot()
         links = [link.get("href") for link in xml.iter() if link.tag.endswith("link")]
         self.assertIn("/opds/proxy/cover/book-123", links)
+
+
+class AuthorFeedRegressionTests(unittest.IsolatedAsyncioTestCase):
+    """Verify author pagination and cross-endpoint name matching."""
+
+    async def test_author_page_parameter_returns_later_authors(self):
+        from opds_abs.feeds.author_feed import AuthorFeedGenerator
+
+        generator = AuthorFeedGenerator()
+        authors = [
+            {"name": f"Author {index:02d}", "ebook_count": 1, "id": str(index)}
+            for index in range(51)
+        ]
+        generator.get_authors_with_ebooks = AsyncMock(return_value=authors)
+
+        page, current, total = await generator._get_paged_authors(
+            "user", "library", 2, 50, "token"
+        )
+
+        self.assertEqual(current, 2)
+        self.assertEqual(total, 2)
+        self.assertEqual([author["name"] for author in page], ["Author 50"])
+
+    async def test_zero_page_size_disables_author_pagination(self):
+        from opds_abs.feeds.author_feed import AuthorFeedGenerator
+
+        generator = AuthorFeedGenerator()
+        authors = [{"name": "Robert Pirsig", "ebook_count": 1, "id": "pirsig"}]
+        generator.get_authors_with_ebooks = AsyncMock(return_value=authors)
+
+        page, current, total = await generator._get_paged_authors(
+            "user", "library", 99, 0, "token"
+        )
+
+        self.assertEqual(current, 1)
+        self.assertEqual(total, 1)
+        self.assertEqual(page, authors)
+
+    def test_author_name_matching_collapses_case_and_whitespace(self):
+        from opds_abs.utils.cache_utils import normalize_author_name
+
+        self.assertEqual(
+            normalize_author_name("  Robert   Pirsig "),
+            normalize_author_name("robert pirsig"),
+        )
+
+    async def test_authors_route_passes_query_page_to_feed_generator(self):
+        import opds_abs.main as main
+
+        with patch.object(main, "AUTH_ENABLED", False), \
+                patch.object(
+                    main.author_feed,
+                    "generate_authors_feed",
+                    new_callable=AsyncMock,
+                    return_value="feed",
+                ) as generate:
+            result = await main.opds_authors(
+                "user", "library", page=2, auth_info=(None, None, None)
+            )
+
+        self.assertEqual(result, "feed")
+        self.assertEqual(generate.call_args.kwargs["page"], 2)
 
 
 if __name__ == "__main__":
