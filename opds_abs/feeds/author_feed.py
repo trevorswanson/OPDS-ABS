@@ -17,6 +17,7 @@ from opds_abs.utils.error_utils import (
     log_error,
     handle_exception
 )
+from opds_abs.config import PAGINATION_ENABLED
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -231,7 +232,7 @@ class AuthorFeedGenerator(BaseFeedGenerator):
         try:
             # Get a cover url if we have a book with an ebook
             cover_url = "/static/images/unknown-author.png"
-            if author.get("imagePath"):
+            if author.get("imagePath") and author.get("id"):
                 cover_url = f"/opds/proxy/author-image/{author.get('id')}"
 
             # Get author ID and name
@@ -242,7 +243,14 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             book_count = author.get("ebook_count", 0)
 
             # Create the base URL for the author's books
-            author_url = f"/opds/{username}/libraries/{library_id}/authors/{author_id}"
+            if author_id:
+                author_url = (
+                    f"/opds/{username}/libraries/{library_id}/authors/{author_id}"
+                )
+            else:
+                # The metadata list can contain an author absent from ABS's
+                # author endpoint. Never emit the literal "None" as a route.
+                author_url = f"/opds/{username}/libraries/{library_id}/authors"
 
             # Add token to URL if provided
             if token:
@@ -323,7 +331,7 @@ class AuthorFeedGenerator(BaseFeedGenerator):
 
     async def generate_authors_feed(
             self, username: str, library_id: str, token: Optional[str] = None,
-            page: int = 1, per_page: int = 50):
+            page: int = 1, per_page: Optional[int] = None):
         """Generate an OPDS feed listing authors with ebooks.
 
         Creates an OPDS feed containing all authors in the specified library
@@ -358,6 +366,11 @@ class AuthorFeedGenerator(BaseFeedGenerator):
             dict_to_xml(feed, feed_data)
 
             try:
+                if not PAGINATION_ENABLED:
+                    per_page = 0
+                elif per_page is None:
+                    per_page = 50
+
                 paged_authors, page, total_pages = await self._get_paged_authors(
                     username, library_id, page, per_page, token)
 
@@ -367,9 +380,12 @@ class AuthorFeedGenerator(BaseFeedGenerator):
                         feed, "No authors with ebooks found",
                         "Could not find any authors with ebooks in the library")
                 else:
-                    # Add pagination links
-                    base_url = f"/opds/{username}/libraries/{library_id}/authors"
-                    self.add_page_pagination_links(feed, base_url, page, total_pages, token)
+                    # Add pagination links only when pagination is active.
+                    if per_page > 0:
+                        base_url = f"/opds/{username}/libraries/{library_id}/authors"
+                        self.add_page_pagination_links(
+                            feed, base_url, page, total_pages, token
+                        )
 
                     # Add each author to the feed
                     for author in paged_authors:
@@ -422,7 +438,10 @@ class AuthorFeedGenerator(BaseFeedGenerator):
 
         # Calculate pagination values
         total_authors = len(authors_list)
-        total_pages = (total_authors + per_page - 1) // per_page  # Ceiling division
+        no_pagination = per_page <= 0
+        total_pages = 1 if no_pagination else (
+            total_authors + per_page - 1
+        ) // per_page
 
         # Adjust page number if out of bounds
         if page < 1:
@@ -430,12 +449,15 @@ class AuthorFeedGenerator(BaseFeedGenerator):
         elif 0 < total_pages < page:
             page = total_pages
 
-        # Calculate start and end indices
-        start_idx = (page - 1) * per_page
-        end_idx = min(start_idx + per_page, total_authors)
+        if no_pagination:
+            paged_authors = authors_list
+        else:
+            # Calculate start and end indices
+            start_idx = (page - 1) * per_page
+            end_idx = min(start_idx + per_page, total_authors)
 
-        # Get the subset of authors for this page
-        paged_authors = authors_list[start_idx:end_idx]
+            # Get the subset of authors for this page
+            paged_authors = authors_list[start_idx:end_idx]
 
         return paged_authors, page, total_pages
 

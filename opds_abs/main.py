@@ -52,7 +52,7 @@ from urllib.parse import urlparse
 # Third-party imports
 import aiohttp
 from markupsafe import escape
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, Query
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -872,6 +872,7 @@ async def opds_collection_items(
 async def opds_authors(
     username: str,
     library_id: str,
+    page: int = Query(1, ge=1),
     auth_info: tuple = Depends(get_authenticated_user)
 ):
     """Get authors from a specific library.
@@ -893,10 +894,11 @@ async def opds_authors(
         if redirect is not None:
             return redirect
 
+        feed_kwargs = {"token": token}
+        if page != 1:
+            feed_kwargs["page"] = page
         return await author_feed.generate_authors_feed(
-            effective_username,
-            library_id,
-            token=token
+            effective_username, library_id, **feed_kwargs
         )
     except ResourceNotFoundError:
         # ResourceNotFoundError is already properly handled in the feed generator

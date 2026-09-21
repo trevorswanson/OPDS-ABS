@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Callable
 import functools
 import json
+import re
 
 import base64
 
@@ -34,6 +35,20 @@ from opds_abs.config import (
 from opds_abs.utils.item_utils import filter_ebook_items
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_author_name(name: Optional[str]) -> str:
+    """Normalize author names before joining records from API responses.
+
+    Args:
+        name: Author name to normalize.
+
+    Returns:
+        A case-insensitive name with repeated whitespace collapsed.
+    """
+    if not name:
+        return ""
+    return re.sub(r"\s+", " ", name).strip().casefold()
 
 
 @dataclass
@@ -482,8 +497,14 @@ def _count_authors_with_ebooks(library_items):
             author_name = metadata.get("authorName")
             if author_name:
                 # Add or update author in our tracking dictionary
-                if author_name in authors_with_ebooks:
-                    authors_with_ebooks[author_name]["ebook_count"] += 1
+                normalized_name = normalize_author_name(author_name)
+                existing_name = next(
+                    (name for name in authors_with_ebooks
+                     if normalize_author_name(name) == normalized_name),
+                    None,
+                )
+                if existing_name is not None:
+                    authors_with_ebooks[existing_name]["ebook_count"] += 1
                 else:
                     authors_with_ebooks[author_name] = {
                         "name": author_name,
@@ -523,12 +544,17 @@ async def _enhance_authors_with_details(
         return False
 
     # Enhance author information with details from the author endpoint
+    normalized_keys = {
+        normalize_author_name(name): name for name in authors_with_ebooks
+    }
     for author in author_data.get("authors", []):
         author_name = author.get("name")
-        if author_name and author_name in authors_with_ebooks:
+        normalized_name = normalize_author_name(author_name)
+        matched_name = normalized_keys.get(normalized_name)
+        if matched_name:
             # Add ID and image path from author details
-            authors_with_ebooks[author_name]["id"] = author.get("id")
-            authors_with_ebooks[author_name]["imagePath"] = author.get("imagePath")
+            authors_with_ebooks[matched_name]["id"] = author.get("id")
+            authors_with_ebooks[matched_name]["imagePath"] = author.get("imagePath")
 
     return True
 
